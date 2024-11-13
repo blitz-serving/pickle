@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <stdexcept>
+#include <vector>
 
 namespace rdma_util {
 
@@ -131,6 +133,11 @@ class ProtectionDomain {
     }
 };
 
+struct WorkCompletion {
+    bool success;
+    uint64_t wr_id;
+};
+
 class RcQueuePair {
     friend class Context;
     friend class MemoryRegion;
@@ -158,20 +165,31 @@ class RcQueuePair {
             throw std::runtime_error("Failed to create completion queue");
         }
 
-        ibv_qp_init_attr init_attr {
-            .send_cq = send_cq,
-            .recv_cq = recv_cq,
-            .cap =
-                {
-                    .max_send_wr = 128,
-                    .max_recv_wr = 1024,
-                    .max_send_sge = 1,
-                    .max_recv_sge = 1,
-                    .max_inline_data = 64,
-                },
-            .qp_type = IBV_QPT_RC,
-            .sq_sig_all = 0,
-        };
+        // ibv_qp_init_attr init_attr {
+        //     .send_cq = send_cq,
+        //     .recv_cq = recv_cq,
+        //     .cap =
+        //         {
+        //             .max_send_wr = 128,
+        //             .max_recv_wr = 1024,
+        //             .max_send_sge = 1,
+        //             .max_recv_sge = 1,
+        //             .max_inline_data = 64,
+        //         },
+        //     .qp_type = IBV_QPT_RC,
+        //     .sq_sig_all = 0,
+        // };
+
+        ibv_qp_init_attr init_attr {};
+        init_attr.send_cq = send_cq;
+        init_attr.recv_cq = recv_cq;
+        init_attr.cap.max_send_wr = 128;
+        init_attr.cap.max_recv_wr = 1024;
+        init_attr.cap.max_send_sge = 1;
+        init_attr.cap.max_recv_sge = 1;
+        init_attr.cap.max_inline_data = 64;
+        init_attr.qp_type = IBV_QPT_RC;
+        init_attr.sq_sig_all = 0;
 
         this->inner = ibv_create_qp(pd->inner, &init_attr);
         if (this->inner == nullptr) {
@@ -231,7 +249,12 @@ class RcQueuePair {
         if (ibv_query_port(this->context_->inner, 1, &attr)) {
             throw std::runtime_error("Failed to query port");
         }
-        return {.gid = gid, .lid = attr.lid, .qp_num = this->inner->qp_num};
+
+        HandshakeData handshake_data {};
+        handshake_data.gid = gid;
+        handshake_data.lid = attr.lid;
+        handshake_data.qp_num = this->inner->qp_num;
+        return handshake_data;
     }
 
     void bring_up(const HandshakeData& handshake_data) noexcept(false) {
@@ -323,6 +346,114 @@ class RcQueuePair {
         }
     }
 
+    int post_send(uint64_t wr_id, uint64_t addr, uint32_t length, uint32_t lkey, bool signaled) noexcept {
+        ibv_sge sge {};
+        sge.addr = addr;
+        sge.length = length;
+        sge.lkey = lkey;
+        ibv_send_wr wr = {};
+        wr.wr_id = wr_id;
+        wr.next = nullptr;
+        wr.sg_list = &sge;
+        wr.num_sge = 1;
+        wr.opcode = IBV_WR_SEND;
+        wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
+        ibv_send_wr* bad_wr;
+        return ibv_post_send(this->inner, &wr, &bad_wr);
+    }
+
+    int post_recv(uint64_t wr_id, uint64_t addr, uint32_t length, uint32_t lkey) noexcept {
+        ibv_sge sge {};
+        sge.addr = addr;
+        sge.length = length;
+        sge.lkey = lkey;
+        ibv_recv_wr wr = {};
+        wr.wr_id = wr_id;
+        wr.next = nullptr;
+        wr.sg_list = &sge;
+        wr.num_sge = 1;
+        ibv_recv_wr* bad_wr;
+        return ibv_post_recv(this->inner, &wr, &bad_wr);
+    }
+
+    /**
+     * @brief poll the send_cq until at least `num_expected_completions` 
+     * work completions are polled or an error occurs
+     * 
+     * @param expected_num_wcs expected number of completions
+     * @param polled_wcs return value to store the polled wr_ids and status
+     * @return int 0 on success, other values on error. Refer to
+     * https://www.rdmamojo.com/2013/02/15/ibv_poll_cq/ for more information.
+     */
+    int wait_until_send_completion(const int expected_num_wcs, std::vector<WorkCompletion>& polled_wcs) noexcept {
+        const int expected = expected_num_wcs;
+        ibv_wc* work_completions = new ibv_wc[expected_num_wcs];
+        int ret = 0;
+        int num_polled_completions = 0;
+
+        if (polled_wcs.size() > 0) {
+            polled_wcs.clear();
+        }
+
+        while (num_polled_completions < expected_num_wcs) {
+            ret = ibv_poll_cq(this->inner->send_cq, expected_num_wcs, work_completions);
+            if (ret > 0) {
+                printf("ret %d\n", ret);
+                for (int i = 0; i < ret; ++i) {
+                    WorkCompletion work_completion {};
+                    work_completion.success = work_completions[i].status == ibv_wc_status::IBV_WC_SUCCESS;
+                    work_completion.wr_id = work_completions[i].wr_id;
+                    polled_wcs.push_back(work_completion);
+                }
+                num_polled_completions += ret;
+            } else if (ret < 0) {
+                delete[] work_completions;
+                return ret;
+            }
+        }
+        delete[] work_completions;
+        return 0;
+    }
+
+    /**
+     * @brief poll the recv_cq until at least `num_expected_completions` 
+     * work completions are polled or an error occurs
+     * 
+     * @param expected_num_wcs expected number of completions
+     * @param polled_wcs return value to store the polled wr_ids and status
+     * @return int 0 on success, other values on error. Refer to
+     * https://www.rdmamojo.com/2013/02/15/ibv_poll_cq/ for more information.
+     */
+    int wait_until_recv_completion(const int expected_num_wcs, std::vector<WorkCompletion>& polled_wcs) noexcept {
+        const int expected = expected_num_wcs;
+        ibv_wc* work_completions = new ibv_wc[expected_num_wcs];
+        int ret = 0;
+        int num_polled_completions = 0;
+
+        if (polled_wcs.size() > 0) {
+            polled_wcs.clear();
+        }
+
+        while (num_polled_completions < expected_num_wcs) {
+            ret = ibv_poll_cq(this->inner->recv_cq, expected_num_wcs, work_completions);
+            if (ret > 0) {
+                printf("ret %d\n", ret);
+                for (int i = 0; i < ret; ++i) {
+                    WorkCompletion work_completion {};
+                    work_completion.success = work_completions[i].status == ibv_wc_status::IBV_WC_SUCCESS;
+                    work_completion.wr_id = work_completions[i].wr_id;
+                    polled_wcs.push_back(work_completion);
+                }
+                num_polled_completions += ret;
+            } else if (ret < 0) {
+                delete[] work_completions;
+                return ret;
+            }
+        }
+        delete[] work_completions;
+        return 0;
+    }
+
     ~RcQueuePair() {
         printf("RcQueuePair destructor\n");
         if (this->inner) {
@@ -365,11 +496,19 @@ class MemoryRegion {
         return std::shared_ptr<MemoryRegion>(new MemoryRegion(pd, addr, length));
     }
 
-    inline void* addr() const {
+    inline uint32_t get_lkey() const {
+        return this->inner->lkey;
+    }
+
+    inline uint32_t get_rkey() const {
+        return this->inner->rkey;
+    }
+
+    inline void* get_addr() const {
         return this->inner->addr;
     }
 
-    inline uint64_t length() const {
+    inline uint64_t get_length() const {
         return this->inner->length;
     }
 

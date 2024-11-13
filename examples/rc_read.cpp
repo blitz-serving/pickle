@@ -64,7 +64,6 @@ void rc_read() {
         read_sge[i].lkey = recv_mr->lkey;
     }
     ibv_send_wr read_wr_list[10];
-    memset(read_wr_list, 0, sizeof(read_wr_list));
     for (int i = 0; i < 10; ++i) {
         read_wr_list[i] = {
             .wr_id = uint64_t(i),
@@ -100,6 +99,9 @@ void rc_read() {
     while (count < 10) {
         int ret = ibv_poll_cq(recver->send_cq, 1, &wc);
         if (ret > 0) {
+            for (int i = 0; i < ret; ++i) {
+                printf("ibv_poll_cq %ld %d\n", wc.wr_id, wc.status);
+            }
             count += ret;
         } else if (ret < 0) {
             printf("ibv_poll_cq error\n");

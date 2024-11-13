@@ -267,7 +267,7 @@ int bring_up_rc(ibv_qp* qp, HandshakeData& data) {
                         .hop_limit = 255,
                     },
                     .dlid = lid,
-                    .is_global = 1,
+                    .is_global = 10,
                     .port_num = 1,
                 },
             .max_dest_rd_atomic = 16,
