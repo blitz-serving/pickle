@@ -169,4 +169,150 @@ void* malloc_gpu_buffer(size_t length, const char* bdf) {
     return init_gpu(length, bdf);
 }
 
+ibv_qp* create_rc(ibv_context* context) {
+    auto pd = ibv_alloc_pd(context);
+    auto send_cq = ibv_create_cq(context, 128, nullptr, nullptr, 0);
+    auto recv_cq = ibv_create_cq(context, 128, nullptr, nullptr, 0);
+    ibv_qp_init_attr init_attr {
+        .send_cq = send_cq,
+        .recv_cq = recv_cq,
+        .cap =
+            {
+                .max_send_wr = 128,
+                .max_recv_wr = 1024,
+                .max_send_sge = 1,
+                .max_recv_sge = 1,
+                .max_inline_data = 64,
+            },
+        .qp_type = IBV_QPT_RC,
+        .sq_sig_all = 0,
+    };
+
+    return ibv_create_qp(pd, &init_attr);
+}
+
+int query_handshake_data(ibv_qp* qp, HandshakeData* handshake_data) {
+    int ret;
+
+    ibv_gid gid;
+    ret = ibv_query_gid(qp->context, 1, 0, &gid);
+    if (ret) {
+        return ret;
+    }
+
+    ibv_port_attr attr;
+    ret = ibv_query_port(qp->context, 1, &attr);
+    if (ret) {
+        return ret;
+    }
+    uint16_t lid = attr.lid;
+
+    HandshakeData data {
+        .gid = gid,
+        .lid = lid,
+        .qp_num = qp->qp_num,
+    };
+    return 0;
+}
+
+int bring_up_rc(ibv_qp* qp, HandshakeData& data) {
+    ibv_gid gid = data.gid;
+    uint16_t lid = data.lid;
+    uint32_t remote_qp_num = data.qp_num;
+
+    {
+        int mask = ibv_qp_attr_mask::IBV_QP_STATE;
+        ibv_qp_attr attr;
+        ibv_qp_init_attr init_attr;
+        int ret = ibv_query_qp(qp, &attr, mask, &init_attr);
+        if (attr.qp_state != ibv_qp_state::IBV_QPS_RESET) {
+            printf("QP state is not RESET\n");
+            return 1;
+        }
+    }
+
+    {
+        // Modify QP to INIT
+        int mask = ibv_qp_attr_mask::IBV_QP_STATE | ibv_qp_attr_mask::IBV_QP_PKEY_INDEX | ibv_qp_attr_mask::IBV_QP_PORT
+            | ibv_qp_attr_mask::IBV_QP_ACCESS_FLAGS;
+        ibv_qp_attr attr = {
+            .qp_state = ibv_qp_state::IBV_QPS_INIT,
+            .qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE,
+            .pkey_index = 0,
+            .port_num = 1,
+        };
+        int ret = ibv_modify_qp(qp, &attr, mask);
+        if (ret) {
+            printf("Failed to modify to INIT\n");
+            return ret;
+        }
+    }
+
+    {
+        // Modify QP to ready-to-receive
+        int mask = ibv_qp_attr_mask::IBV_QP_STATE | ibv_qp_attr_mask::IBV_QP_AV | ibv_qp_attr_mask::IBV_QP_PATH_MTU
+            | ibv_qp_attr_mask::IBV_QP_DEST_QPN | ibv_qp_attr_mask::IBV_QP_RQ_PSN
+            | ibv_qp_attr_mask::IBV_QP_MAX_DEST_RD_ATOMIC | ibv_qp_attr_mask::IBV_QP_MIN_RNR_TIMER;
+        ibv_qp_attr attr = {
+            .qp_state = ibv_qp_state::IBV_QPS_RTR,
+            .path_mtu = ibv_mtu::IBV_MTU_4096,
+            .rq_psn = remote_qp_num,
+            .dest_qp_num = remote_qp_num,
+            .ah_attr =
+                {
+                    .grh {
+                        .dgid = gid,
+                        .flow_label = 0,
+                        .sgid_index = 0,
+                        .hop_limit = 255,
+                    },
+                    .dlid = lid,
+                    .is_global = 1,
+                    .port_num = 1,
+                },
+            .max_dest_rd_atomic = 16,
+            .min_rnr_timer = 0,
+        };
+
+        int ret = ibv_modify_qp(qp, &attr, mask);
+        if (ret) {
+            printf("Failed to modify to RTR\n");
+            return ret;
+        }
+    }
+
+    {
+        // Modify QP to ready-to-send
+        int mask = ibv_qp_attr_mask::IBV_QP_STATE | ibv_qp_attr_mask::IBV_QP_TIMEOUT
+            | ibv_qp_attr_mask::IBV_QP_RETRY_CNT | ibv_qp_attr_mask::IBV_QP_RNR_RETRY | ibv_qp_attr_mask::IBV_QP_SQ_PSN
+            | ibv_qp_attr_mask::IBV_QP_MAX_QP_RD_ATOMIC;
+
+        ibv_qp_attr attr = {
+            .qp_state = ibv_qp_state::IBV_QPS_RTS,
+            .sq_psn = qp->qp_num,
+            .max_rd_atomic = 16,
+            .timeout = 14,
+            .retry_cnt = 7,
+            .rnr_retry = 7,
+        };
+
+        int ret = ibv_modify_qp(qp, &attr, mask);
+        if (ret) {
+            printf("Failed to modify to RTS\n");
+            return ret;
+        }
+    }
+
+    {
+        // Check QP state
+        ibv_qp_attr attr;
+        ibv_qp_init_attr init_attr;
+        ibv_query_qp(qp, &attr, ibv_qp_attr_mask::IBV_QP_STATE | ibv_qp_attr_mask::IBV_QP_CUR_STATE, &init_attr);
+        printf("qp_state %d\n", attr.qp_state);
+        printf("cur_qp_state %d\n", attr.cur_qp_state);
+    }
+
+    return 0;
+}
+
 }  // namespace rdma_util
