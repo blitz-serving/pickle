@@ -64,8 +64,9 @@ void rc_read() {
         read_sge[i].lkey = recv_mr->lkey;
     }
     ibv_send_wr read_wr_list[10];
+    memset(read_wr_list, 0, sizeof(read_wr_list));
     for (int i = 0; i < 10; ++i) {
-        ibv_send_wr read_wr = {
+        read_wr_list[i] = {
             .wr_id = uint64_t(i),
             .next = nullptr,
             .sg_list = &read_sge[i],
@@ -80,7 +81,6 @@ void rc_read() {
                             .rkey = send_mr->rkey,
                         },
                 },
-
         };
     };
 
