@@ -1,104 +1,50 @@
-#include <infiniband/verbs.h>
-#include <netdb.h>
-#include <rdma/rdma_cma.h>
-#include <sys/types.h>
-
 #include <cstdint>
-#include <cstdio>
 #include <cstdlib>
-#include <cstring>
+#include <vector>
 
 #include "rdma_util.h"
 
-using rdma_util::bring_up_rc;
-using rdma_util::create_rc;
-using rdma_util::HandshakeData;
-using rdma_util::open_ib_device;
-using rdma_util::query_handshake_data;
-
-void loopback() {
-    ibv_context* context = nullptr;
-    open_ib_device(&context, "mlx5_0");
-    auto qp = create_rc(context);
-    HandshakeData data;
-    if (query_handshake_data(qp, &data)) {
-        printf("query_handshake_data failed\n");
-        return;
-    }
-    if (bring_up_rc(qp, data)) {
-        printf("bring_up_rc failed\n");
-        return;
-    }
-
-    void* buffer = malloc(1024 * 10);
-    auto mr = ibv_reg_mr(
-        qp->pd,
-        buffer,
-        1024 * 10,
-        ibv_access_flags::IBV_ACCESS_LOCAL_WRITE | ibv_access_flags::IBV_ACCESS_REMOTE_READ
-            | ibv_access_flags::IBV_ACCESS_REMOTE_WRITE
-    );
-
-    ibv_sge sge {};
-    sge.addr = uint64_t(buffer);
-    sge.length = 1024 * 10;
-    sge.lkey = mr->lkey;
-    ibv_send_wr wr {};
-    wr.wr_id = 0;
-    wr.next = nullptr;
-    wr.sg_list = &sge;
-    wr.num_sge = 1;
-    wr.opcode = IBV_WR_RDMA_READ;
-    wr.send_flags = uint32_t(ibv_send_flags::IBV_SEND_SIGNALED);
-    wr.wr.rdma.remote_addr = uint64_t(buffer);
-    wr.wr.rdma.rkey = mr->rkey;
-
-    // ibv_sge sge = {
-    //     .addr = uint64_t(buffer),
-    //     .length = 1024 * 10,
-    //     .lkey = mr->lkey,
-    // };
-    // ibv_send_wr wr = {
-    //     .wr_id = 0,
-    //     .next = nullptr,
-    //     .sg_list = &sge,
-    //     .num_sge = 1,
-    //     .opcode = IBV_WR_RDMA_READ,
-    //     .send_flags = uint32_t(ibv_send_flags::IBV_SEND_SIGNALED),
-    //     .wr =
-    //         {
-    //             .rdma =
-    //                 {
-    //                     .remote_addr = uint64_t(buffer),
-    //                     .rkey = mr->rkey,
-    //                 },
-    //         },
-    // };
-
-    if (ibv_post_send(qp, &wr, nullptr)) {
-        printf("ibv_post_send failed\n");
-        return;
-    } else {
-        printf("ibv_post_send succeeded\n");
-    }
-
-    ibv_wc wc;
-
-    while (ibv_poll_cq(qp->send_cq, 1, &wc)) {}
-    printf("ibv_poll_cq\n");
-
-    if (ibv_post_send(qp, &wr, nullptr)) {
-        printf("ibv_post_send failed\n");
-        return;
-    } else {
-        printf("ibv_post_send succeeded\n");
-    }
-
-    while (ibv_poll_cq(qp->send_cq, 1, &wc)) {}
-    printf("ibv_poll_cq\n");
-}
-
 int main() {
-    loopback();
+    const uint64_t size = 1024 * 1024 * 1024;
+    auto buffer = new uint8_t[size];
+
+    {
+        auto qp = rdma_util::RcQueuePair::create("mlx5_0");
+        auto mr = rdma_util::MemoryRegion::create(qp->get_pd(), buffer, size);
+        qp->bring_up(qp->get_handshake_data());
+
+        if (qp->query_qp_state() != rdma_util::QueuePairState::RTS) {
+            printf("qp1 is not in RTS state\n");
+            return 1;
+        }
+
+        for (int i = 0; i < 10; ++i) {
+            if (qp->post_recv(i, reinterpret_cast<uint64_t>(buffer) + i * 1024, 1024, mr->get_lkey())) {
+                printf("post_recv failed\n");
+                return 1;
+            }
+        }
+
+        for (int i = 10; i < 20; ++i) {
+            if (qp->post_send(i, reinterpret_cast<uint64_t>(buffer) + i * 1024, 1024, mr->get_lkey(), true)) {
+                printf("post_send failed\n");
+                return 1;
+            }
+        }
+
+        std::vector<rdma_util::WorkCompletion> polled_recv_wcs, polled_send_wcs;
+
+        qp->wait_until_send_completion(10, polled_send_wcs);
+        for (const auto& wc : polled_send_wcs) {
+            printf("success %s\n", wc.to_string().c_str());
+        }
+
+        qp->wait_until_recv_completion(10, polled_recv_wcs);
+        for (const auto& wc : polled_recv_wcs) {
+            printf("success %s\n", wc.to_string().c_str());
+        }
+    }
+
+    delete[] buffer;
     return 0;
 }

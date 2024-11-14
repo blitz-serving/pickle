@@ -5,26 +5,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_BUILD_TYPE Release)
 
-option(BUILD_TESTS "Build tests" OFF)
-option(BUILD_EXAMPLES "Build examples" OFF)
+option(BUILD_TESTS "Build tests" ON)
+option(BUILD_EXAMPLES "Build examples" ON)
 
 if(BUILD_TESTS)
-    include(FetchContent)
-    FetchContent_Declare(
-        googletest
-        GIT_REPOSITORY https://github.com/google/googletest.git
-        GIT_TAG v1.15.2
-    )
-    FetchContent_MakeAvailable(googletest)
+    add_subdirectory(third_party/googletest)
 endif()
 
 add_library(rdma_util STATIC "src/rdma_util.cpp")
-target_link_libraries(rdma_util PUBLIC ibverbs mlx5 rdmacm)
+target_link_libraries(rdma_util PUBLIC ibverbs)
 target_include_directories(rdma_util PUBLIC "include")
-
-# add_library(rdma_util STATIC "src/rdma_util.cpp")
-# target_link_libraries(rdma_util PUBLIC ibverbs mlx5 rdmacm cuda)
-# target_include_directories(rdma_util PUBLIC "include" "/usr/local/cuda-12.1/targets/x86_64-linux/include" "/usr/local/cuda/include")
 
 # Add test executables
 if(BUILD_TESTS)
@@ -45,6 +35,6 @@ if(BUILD_EXAMPLES)
     foreach(EXAMPLE_SOURCE ${EXAMPLE_SOURCES})
         get_filename_component(EXAMPLE_NAME ${EXAMPLE_SOURCE} NAME_WE)
         add_executable(${EXAMPLE_NAME} ${EXAMPLE_SOURCE})
-        target_link_libraries(${EXAMPLE_NAME} ibverbs mlx5 rdmacm rdma_util)
+        target_link_libraries(${EXAMPLE_NAME} rdma_util)
     endforeach()
 endif()

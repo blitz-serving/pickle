@@ -13,7 +13,7 @@ int main() {
         auto qp2 = rdma_util::RcQueuePair::create("mlx5_1");
 
         auto mr1 = rdma_util::MemoryRegion::create(qp1->get_pd(), buffer, size);
-        auto mr2 = rdma_util::MemoryRegion::create(qp1->get_pd(), buffer, size);
+        auto mr2 = rdma_util::MemoryRegion::create(qp2->get_pd(), buffer, size);
 
         qp1->bring_up(qp2->get_handshake_data());
         qp2->bring_up(qp1->get_handshake_data());
@@ -38,16 +38,16 @@ int main() {
 
         std::vector<rdma_util::WorkCompletion> polled_recv_wcs, polled_send_wcs;
         qp2->wait_until_send_completion(1, polled_send_wcs);
-        qp1->wait_until_recv_completion(1, polled_recv_wcs);
-
-        for (const auto& wc : polled_recv_wcs) {
-            printf("success %d\n", wc.success);
-        }
         for (const auto& wc : polled_send_wcs) {
-            printf("success %d\n", wc.success);
+            printf("success %s\n", wc.to_string().c_str());
+        }
+
+        qp1->wait_until_recv_completion(1, polled_recv_wcs);
+        for (const auto& wc : polled_recv_wcs) {
+            printf("success %s\n", wc.to_string().c_str());
         }
     }
 
-    free(buffer);
+    delete[] buffer;
     return 0;
 }

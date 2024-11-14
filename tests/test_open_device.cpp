@@ -14,18 +14,19 @@ TEST(OpenDevice, GetDevices) {
 }
 
 TEST(OpenDevice, OpenNonexistentDevice) {
-    const char* dev_name = "nonexistent";
-    ibv_context* context;
-    auto result = rdma_util::open_ib_device(&context, dev_name);
-    ASSERT_EQ(context, nullptr);
+    try {
+        const char* dev_name = "nonexistent";
+        auto context = rdma_util::Context::create(dev_name);
+        FAIL();
+    } catch (std::runtime_error& e) {
+        printf("Caught exception: %s\n", e.what());
+    }
 }
 
 TEST(OpenDevice, OpenIBDevice) {
     const char* dev_name = "mlx5_0";
-    ibv_context* context;
-    auto result = rdma_util::open_ib_device(&context, dev_name);
+    auto context = rdma_util::Context::create(dev_name);
     ASSERT_NE(context, nullptr);
-    ASSERT_EQ(rdma_util::close_ib_device(context), rdma_util::Result_t::SUCCESS);
 }
 
 int main(int argc, char** argv) {
