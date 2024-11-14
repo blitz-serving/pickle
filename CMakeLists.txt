@@ -1,16 +1,15 @@
-cmake_minimum_required(VERSION 3.18 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.5 FATAL_ERROR)
 project(NanoGDR LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_BUILD_TYPE Release)
 
-option(BUILD_TESTS "Build tests" ON)
-option(BUILD_EXAMPLES "Build examples" ON)
-
-include(FetchContent)
+option(BUILD_TESTS "Build tests" OFF)
+option(BUILD_EXAMPLES "Build examples" OFF)
 
 if(BUILD_TESTS)
+    include(FetchContent)
     FetchContent_Declare(
         googletest
         GIT_REPOSITORY https://github.com/google/googletest.git
@@ -20,8 +19,12 @@ if(BUILD_TESTS)
 endif()
 
 add_library(rdma_util STATIC "src/rdma_util.cpp")
-target_link_libraries(rdma_util PUBLIC ibverbs mlx5 rdmacm cuda)
-target_include_directories(rdma_util PUBLIC "include" "/usr/local/cuda-12.1/targets/x86_64-linux/include" "/usr/local/cuda/include")
+target_link_libraries(rdma_util PUBLIC ibverbs mlx5 rdmacm)
+target_include_directories(rdma_util PUBLIC "include")
+
+# add_library(rdma_util STATIC "src/rdma_util.cpp")
+# target_link_libraries(rdma_util PUBLIC ibverbs mlx5 rdmacm cuda)
+# target_include_directories(rdma_util PUBLIC "include" "/usr/local/cuda-12.1/targets/x86_64-linux/include" "/usr/local/cuda/include")
 
 # Add test executables
 if(BUILD_TESTS)

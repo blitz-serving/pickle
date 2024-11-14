@@ -65,22 +65,33 @@ void rc_read() {
     }
     ibv_send_wr read_wr_list[10];
     for (int i = 0; i < 10; ++i) {
-        read_wr_list[i] = {
-            .wr_id = uint64_t(i),
-            .next = nullptr,
-            .sg_list = &read_sge[i],
-            .num_sge = 1,
-            .opcode = IBV_WR_RDMA_READ,
-            .send_flags = uint32_t(ibv_send_flags::IBV_SEND_SIGNALED),
-            .wr =
-                {
-                    .rdma =
-                        {
-                            .remote_addr = uint64_t(send_buffer) + i * 1024,
-                            .rkey = send_mr->rkey,
-                        },
-                },
-        };
+        ibv_send_wr wr {};
+        wr.wr_id = uint64_t(i);
+        wr.next = nullptr;
+        wr.sg_list = &read_sge[i];
+        wr.num_sge = 1;
+        wr.opcode = IBV_WR_RDMA_READ;
+        wr.send_flags = uint32_t(ibv_send_flags::IBV_SEND_SIGNALED);
+        wr.wr.rdma.remote_addr = uint64_t(send_buffer) + i * 1024;
+        wr.wr.rdma.rkey = send_mr->rkey;
+        read_wr_list[i] = wr;
+
+        // read_wr_list[i] = {
+        //     .wr_id = uint64_t(i),
+        //     .next = nullptr,
+        //     .sg_list = &read_sge[i],
+        //     .num_sge = 1,
+        //     .opcode = IBV_WR_RDMA_READ,
+        //     .send_flags = uint32_t(ibv_send_flags::IBV_SEND_SIGNALED),
+        //     .wr =
+        //         {
+        //             .rdma =
+        //                 {
+        //                     .remote_addr = uint64_t(send_buffer) + i * 1024,
+        //                     .rkey = send_mr->rkey,
+        //                 },
+        //         },
+        // };
     };
 
     ibv_send_wr* bad_wr_list[10];

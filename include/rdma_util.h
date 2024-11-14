@@ -17,7 +17,7 @@ struct HandshakeData {
     uint32_t qp_num;
 };
 
-void* malloc_gpu_buffer(size_t length, const char* bdf);
+// void* malloc_gpu_buffer(size_t length, const char* bdf);
 
 enum Result_t {
     SUCCESS = 0,
@@ -282,12 +282,19 @@ class RcQueuePair {
             // Modify QP to INIT
             int mask = ibv_qp_attr_mask::IBV_QP_STATE | ibv_qp_attr_mask::IBV_QP_PKEY_INDEX
                 | ibv_qp_attr_mask::IBV_QP_PORT | ibv_qp_attr_mask::IBV_QP_ACCESS_FLAGS;
-            ibv_qp_attr attr = {
-                .qp_state = ibv_qp_state::IBV_QPS_INIT,
-                .qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE,
-                .pkey_index = 0,
-                .port_num = 1,
-            };
+            
+            ibv_qp_attr attr {};
+            attr.qp_state = ibv_qp_state::IBV_QPS_INIT;
+            attr.qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+            attr.pkey_index = 0;
+            attr.port_num = 1;
+            
+            // ibv_qp_attr attr = {
+            //     .qp_state = ibv_qp_state::IBV_QPS_INIT,
+            //     .qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE,
+            //     .pkey_index = 0,
+            //     .port_num = 1,
+            // };
 
             if (ibv_modify_qp(this->inner, &attr, mask)) {
                 throw std::runtime_error("Failed to modify to INIT");
@@ -299,26 +306,41 @@ class RcQueuePair {
             int mask = ibv_qp_attr_mask::IBV_QP_STATE | ibv_qp_attr_mask::IBV_QP_AV | ibv_qp_attr_mask::IBV_QP_PATH_MTU
                 | ibv_qp_attr_mask::IBV_QP_DEST_QPN | ibv_qp_attr_mask::IBV_QP_RQ_PSN
                 | ibv_qp_attr_mask::IBV_QP_MAX_DEST_RD_ATOMIC | ibv_qp_attr_mask::IBV_QP_MIN_RNR_TIMER;
-            ibv_qp_attr attr = {
-                .qp_state = ibv_qp_state::IBV_QPS_RTR,
-                .path_mtu = ibv_mtu::IBV_MTU_4096,
-                .rq_psn = remote_qp_num,
-                .dest_qp_num = remote_qp_num,
-                .ah_attr =
-                    {
-                        .grh {
-                            .dgid = gid,
-                            .flow_label = 0,
-                            .sgid_index = 0,
-                            .hop_limit = 255,
-                        },
-                        .dlid = lid,
-                        .is_global = 1,
-                        .port_num = 1,
-                    },
-                .max_dest_rd_atomic = 16,
-                .min_rnr_timer = 0,
-            };
+            ibv_qp_attr attr {};
+            attr.qp_state = ibv_qp_state::IBV_QPS_RTR;
+            attr.path_mtu = ibv_mtu::IBV_MTU_4096;
+            attr.rq_psn = remote_qp_num;
+            attr.dest_qp_num = remote_qp_num;
+            attr.ah_attr.grh.dgid = gid;
+            attr.ah_attr.grh.flow_label = 0;
+            attr.ah_attr.grh.sgid_index = 0;
+            attr.ah_attr.grh.hop_limit = 255;
+            attr.ah_attr.dlid = lid;
+            attr.ah_attr.is_global = 1;
+            attr.ah_attr.port_num = 1;
+            attr.max_dest_rd_atomic = 16;
+            attr.min_rnr_timer = 0;
+            
+            // ibv_qp_attr attr = {
+            //     .qp_state = ibv_qp_state::IBV_QPS_RTR,
+            //     .path_mtu = ibv_mtu::IBV_MTU_4096,
+            //     .rq_psn = remote_qp_num,
+            //     .dest_qp_num = remote_qp_num,
+            //     .ah_attr =
+            //         {
+            //             .grh {
+            //                 .dgid = gid,
+            //                 .flow_label = 0,
+            //                 .sgid_index = 0,
+            //                 .hop_limit = 255,
+            //             },
+            //             .dlid = lid,
+            //             .is_global = 1,
+            //             .port_num = 1,
+            //         },
+            //     .max_dest_rd_atomic = 16,
+            //     .min_rnr_timer = 0,
+            // };
 
             if (ibv_modify_qp(this->inner, &attr, mask)) {
                 throw std::runtime_error("Failed to modify to RTR");
@@ -331,14 +353,22 @@ class RcQueuePair {
                 | ibv_qp_attr_mask::IBV_QP_RETRY_CNT | ibv_qp_attr_mask::IBV_QP_RNR_RETRY
                 | ibv_qp_attr_mask::IBV_QP_SQ_PSN | ibv_qp_attr_mask::IBV_QP_MAX_QP_RD_ATOMIC;
 
-            ibv_qp_attr attr = {
-                .qp_state = ibv_qp_state::IBV_QPS_RTS,
-                .sq_psn = this->inner->qp_num,
-                .max_rd_atomic = 16,
-                .timeout = 14,
-                .retry_cnt = 7,
-                .rnr_retry = 7,
-            };
+            ibv_qp_attr attr {};
+            attr.qp_state = ibv_qp_state::IBV_QPS_RTS;
+            attr.sq_psn = this->inner->qp_num;
+            attr.max_rd_atomic = 16;
+            attr.timeout = 14;
+            attr.retry_cnt = 7;
+            attr.rnr_retry = 7;
+
+            // ibv_qp_attr attr = {
+            //     .qp_state = ibv_qp_state::IBV_QPS_RTS,
+            //     .sq_psn = this->inner->qp_num,
+            //     .max_rd_atomic = 16,
+            //     .timeout = 14,
+            //     .retry_cnt = 7,
+            //     .rnr_retry = 7,
+            // };
 
             if (ibv_modify_qp(this->inner, &attr, mask)) {
                 throw std::runtime_error("Failed to modify to RTS");

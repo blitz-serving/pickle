@@ -1,6 +1,6 @@
 #include "rdma_util.h"
 
-#include <cuda.h>
+// #include <cuda.h>
 #include <infiniband/verbs.h>
 
 #include <cstdio>
@@ -50,143 +50,155 @@ Result_t close_ib_device(ibv_context* context) {
     }
 }
 
-#define ASSERT(x) \
-    do { \
-        if (!(x)) { \
-            fprintf(stdout, "Assertion \"%s\" failed at %s:%d\n", #x, __FILE__, __LINE__); \
-        } \
-    } while (0)
+// #define ASSERT(x) \
+//     do { \
+//         if (!(x)) { \
+//             fprintf(stdout, "Assertion \"%s\" failed at %s:%d\n", #x, __FILE__, __LINE__); \
+//         } \
+//     } while (0)
 
-#define CUCHECK(stmt) \
-    do { \
-        CUresult result = (stmt); \
-        ASSERT(CUDA_SUCCESS == result); \
-    } while (0)
+// #define CUCHECK(stmt) \
+//     do { \
+//         CUresult result = (stmt); \
+//         ASSERT(CUDA_SUCCESS == result); \
+//     } while (0)
 
-static int get_gpu_device_id_from_bdf(const char* bdf) {
-    int given_bus_id = 0;
-    int given_device_id = 0;
-    int given_func = 0;
-    int device_count = 0;
-    int i;
-    int ret_val;
+// static int get_gpu_device_id_from_bdf(const char* bdf) {
+//     int given_bus_id = 0;
+//     int given_device_id = 0;
+//     int given_func = 0;
+//     int device_count = 0;
+//     int i;
+//     int ret_val;
 
-    /*    "3e:02.0"*/
-    ret_val = sscanf(bdf, "%x:%x.%x", &given_bus_id, &given_device_id, &given_func);
-    if (ret_val != 3) {
-        fprintf(
-            stderr,
-            "Wrong BDF format \"%s\". Expected format example: \"3e:02.0\", "
-            "where 3e - bus id, 02 - device id, 0 - function\n",
-            bdf
-        );
-        return -1;
-    }
-    if (given_func != 0) {
-        fprintf(stderr, "Wrong pci function %d, 0 is expected\n", given_func);
-        return -1;
-    }
-    CUCHECK(cuDeviceGetCount(&device_count));
+//     /*    "3e:02.0"*/
+//     ret_val = sscanf(bdf, "%x:%x.%x", &given_bus_id, &given_device_id, &given_func);
+//     if (ret_val != 3) {
+//         fprintf(
+//             stderr,
+//             "Wrong BDF format \"%s\". Expected format example: \"3e:02.0\", "
+//             "where 3e - bus id, 02 - device id, 0 - function\n",
+//             bdf
+//         );
+//         return -1;
+//     }
+//     if (given_func != 0) {
+//         fprintf(stderr, "Wrong pci function %d, 0 is expected\n", given_func);
+//         return -1;
+//     }
+//     CUCHECK(cuDeviceGetCount(&device_count));
 
-    if (device_count == 0) {
-        fprintf(stderr, "There are no available devices that support CUDA\n");
-        return -1;
-    }
+//     if (device_count == 0) {
+//         fprintf(stderr, "There are no available devices that support CUDA\n");
+//         return -1;
+//     }
 
-    for (i = 0; i < device_count; i++) {
-        CUdevice cu_dev;
-        int pci_bus_id = 0;
-        int pci_device_id = 0;
+//     for (i = 0; i < device_count; i++) {
+//         CUdevice cu_dev;
+//         int pci_bus_id = 0;
+//         int pci_device_id = 0;
 
-        CUCHECK(cuDeviceGet(&cu_dev, i));
-        CUCHECK(cuDeviceGetAttribute(&pci_bus_id, CU_DEVICE_ATTRIBUTE_PCI_BUS_ID, cu_dev)
-        ); /*PCI bus identifier of the device*/
-        CUCHECK(cuDeviceGetAttribute(&pci_device_id, CU_DEVICE_ATTRIBUTE_PCI_DEVICE_ID, cu_dev)
-        ); /*PCI device (also known as slot) identifier of the device*/
-        if ((pci_bus_id == given_bus_id) && (pci_device_id == given_device_id)) {
-            return i;
-        }
-    }
-    fprintf(stderr, "Given BDF \"%s\" doesn't match one of GPU devices\n", bdf);
-    return -1;
-}
+//         CUCHECK(cuDeviceGet(&cu_dev, i));
+//         CUCHECK(cuDeviceGetAttribute(&pci_bus_id, CU_DEVICE_ATTRIBUTE_PCI_BUS_ID, cu_dev)
+//         ); /*PCI bus identifier of the device*/
+//         CUCHECK(cuDeviceGetAttribute(&pci_device_id, CU_DEVICE_ATTRIBUTE_PCI_DEVICE_ID, cu_dev)
+//         ); /*PCI device (also known as slot) identifier of the device*/
+//         if ((pci_bus_id == given_bus_id) && (pci_device_id == given_device_id)) {
+//             return i;
+//         }
+//     }
+//     fprintf(stderr, "Given BDF \"%s\" doesn't match one of GPU devices\n", bdf);
+//     return -1;
+// }
 
-static CUcontext cuContext;
+// static CUcontext cuContext;
 
-static void* init_gpu(size_t gpu_buf_size, const char* bdf) {
-    const size_t gpu_page_size = 64 * 1024;
-    size_t aligned_size;
-    CUresult cu_result;
+// static void* init_gpu(size_t gpu_buf_size, const char* bdf) {
+//     const size_t gpu_page_size = 64 * 1024;
+//     size_t aligned_size;
+//     CUresult cu_result;
 
-    aligned_size = (gpu_buf_size + gpu_page_size - 1) & ~(gpu_page_size - 1);
-    printf("initializing CUDA\n");
-    cu_result = cuInit(0);
-    if (cu_result != CUDA_SUCCESS) {
-        fprintf(stderr, "cuInit(0) returned %d\n", cu_result);
-        return NULL;
-    }
+//     aligned_size = (gpu_buf_size + gpu_page_size - 1) & ~(gpu_page_size - 1);
+//     printf("initializing CUDA\n");
+//     cu_result = cuInit(0);
+//     if (cu_result != CUDA_SUCCESS) {
+//         fprintf(stderr, "cuInit(0) returned %d\n", cu_result);
+//         return NULL;
+//     }
 
-    int dev_id = get_gpu_device_id_from_bdf(bdf);
-    if (dev_id < 0) {
-        fprintf(stderr, "Wrong device index (%d) obtained from bdf \"%s\"\n", dev_id, bdf);
-        /* This function returns NULL if there are no CUDA capable devices. */
-        return NULL;
-    }
+//     int dev_id = get_gpu_device_id_from_bdf(bdf);
+//     if (dev_id < 0) {
+//         fprintf(stderr, "Wrong device index (%d) obtained from bdf \"%s\"\n", dev_id, bdf);
+//         /* This function returns NULL if there are no CUDA capable devices. */
+//         return NULL;
+//     }
 
-    /* Pick up device by given dev_id - an ordinal in the range [0,
-   * cuDeviceGetCount()-1] */
-    CUdevice cu_dev;
-    CUCHECK(cuDeviceGet(&cu_dev, dev_id));
+//     /* Pick up device by given dev_id - an ordinal in the range [0,
+//    * cuDeviceGetCount()-1] */
+//     CUdevice cu_dev;
+//     CUCHECK(cuDeviceGet(&cu_dev, dev_id));
 
-    printf("creating CUDA Contnext\n");
-    /* Create context */
-    cu_result = cuCtxCreate(&cuContext, CU_CTX_MAP_HOST, cu_dev);
-    if (cu_result != CUDA_SUCCESS) {
-        fprintf(stderr, "cuCtxCreate() error=%d\n", cu_result);
-        return NULL;
-    }
+//     printf("creating CUDA Contnext\n");
+//     /* Create context */
+//     cu_result = cuCtxCreate(&cuContext, CU_CTX_MAP_HOST, cu_dev);
+//     if (cu_result != CUDA_SUCCESS) {
+//         fprintf(stderr, "cuCtxCreate() error=%d\n", cu_result);
+//         return NULL;
+//     }
 
-    printf("making it the current CUDA Context\n");
-    cu_result = cuCtxSetCurrent(cuContext);
-    if (cu_result != CUDA_SUCCESS) {
-        fprintf(stderr, "cuCtxSetCurrent() error=%d\n", cu_result);
-        return NULL;
-    }
+//     printf("making it the current CUDA Context\n");
+//     cu_result = cuCtxSetCurrent(cuContext);
+//     if (cu_result != CUDA_SUCCESS) {
+//         fprintf(stderr, "cuCtxSetCurrent() error=%d\n", cu_result);
+//         return NULL;
+//     }
 
-    printf("cuMemAlloc() of a %zd bytes GPU buffer\n", aligned_size);
-    CUdeviceptr d_A;
-    cu_result = cuMemAlloc(&d_A, aligned_size);
-    if (cu_result != CUDA_SUCCESS) {
-        fprintf(stderr, "cuMemAlloc error=%d\n", cu_result);
-        return NULL;
-    }
-    printf("allocated GPU buffer address at %016llx pointer=%p\n", d_A, (void*)d_A);
+//     printf("cuMemAlloc() of a %zd bytes GPU buffer\n", aligned_size);
+//     CUdeviceptr d_A;
+//     cu_result = cuMemAlloc(&d_A, aligned_size);
+//     if (cu_result != CUDA_SUCCESS) {
+//         fprintf(stderr, "cuMemAlloc error=%d\n", cu_result);
+//         return NULL;
+//     }
+//     printf("allocated GPU buffer address at %016llx pointer=%p\n", d_A, (void*)d_A);
 
-    return ((void*)d_A);
-}
+//     return ((void*)d_A);
+// }
 
-void* malloc_gpu_buffer(size_t length, const char* bdf) {
-    return init_gpu(length, bdf);
-}
+// void* malloc_gpu_buffer(size_t length, const char* bdf) {
+//     return init_gpu(length, bdf);
+// }
 
 ibv_qp* create_rc(ibv_context* context) {
     auto pd = ibv_alloc_pd(context);
     auto send_cq = ibv_create_cq(context, 128, nullptr, nullptr, 0);
     auto recv_cq = ibv_create_cq(context, 128, nullptr, nullptr, 0);
-    ibv_qp_init_attr init_attr {
-        .send_cq = send_cq,
-        .recv_cq = recv_cq,
-        .cap =
-            {
-                .max_send_wr = 128,
-                .max_recv_wr = 1024,
-                .max_send_sge = 1,
-                .max_recv_sge = 1,
-                .max_inline_data = 64,
-            },
-        .qp_type = IBV_QPT_RC,
-        .sq_sig_all = 0,
-    };
+
+    ibv_qp_init_attr init_attr {};
+    init_attr.send_cq = send_cq;
+    init_attr.recv_cq = recv_cq;
+    init_attr.cap.max_send_wr = 128;
+    init_attr.cap.max_recv_wr = 1024;
+    init_attr.cap.max_send_sge = 1;
+    init_attr.cap.max_recv_sge = 1;
+    init_attr.cap.max_inline_data = 64;
+    init_attr.qp_type = IBV_QPT_RC;
+    init_attr.sq_sig_all = 0;
+
+    // ibv_qp_init_attr init_attr {
+    //     .send_cq = send_cq,
+    //     .recv_cq = recv_cq,
+    //     .cap =
+    //         {
+    //             .max_send_wr = 128,
+    //             .max_recv_wr = 1024,
+    //             .max_send_sge = 1,
+    //             .max_recv_sge = 1,
+    //             .max_inline_data = 64,
+    //         },
+    //     .qp_type = IBV_QPT_RC,
+    //     .sq_sig_all = 0,
+    // };
 
     return ibv_create_qp(pd, &init_attr);
 }
@@ -235,12 +247,19 @@ int bring_up_rc(ibv_qp* qp, HandshakeData& data) {
         // Modify QP to INIT
         int mask = ibv_qp_attr_mask::IBV_QP_STATE | ibv_qp_attr_mask::IBV_QP_PKEY_INDEX | ibv_qp_attr_mask::IBV_QP_PORT
             | ibv_qp_attr_mask::IBV_QP_ACCESS_FLAGS;
-        ibv_qp_attr attr = {
-            .qp_state = ibv_qp_state::IBV_QPS_INIT,
-            .qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE,
-            .pkey_index = 0,
-            .port_num = 1,
-        };
+        
+        ibv_qp_attr attr {};
+        attr.qp_state = ibv_qp_state::IBV_QPS_INIT;
+        attr.qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+        attr.pkey_index = 0;
+        attr.port_num = 1;
+        
+        // ibv_qp_attr attr = {
+        //     .qp_state = ibv_qp_state::IBV_QPS_INIT,
+        //     .qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE,
+        //     .pkey_index = 0,
+        //     .port_num = 1,
+        // };
         int ret = ibv_modify_qp(qp, &attr, mask);
         if (ret) {
             printf("Failed to modify to INIT\n");
@@ -253,26 +272,42 @@ int bring_up_rc(ibv_qp* qp, HandshakeData& data) {
         int mask = ibv_qp_attr_mask::IBV_QP_STATE | ibv_qp_attr_mask::IBV_QP_AV | ibv_qp_attr_mask::IBV_QP_PATH_MTU
             | ibv_qp_attr_mask::IBV_QP_DEST_QPN | ibv_qp_attr_mask::IBV_QP_RQ_PSN
             | ibv_qp_attr_mask::IBV_QP_MAX_DEST_RD_ATOMIC | ibv_qp_attr_mask::IBV_QP_MIN_RNR_TIMER;
-        ibv_qp_attr attr = {
-            .qp_state = ibv_qp_state::IBV_QPS_RTR,
-            .path_mtu = ibv_mtu::IBV_MTU_4096,
-            .rq_psn = remote_qp_num,
-            .dest_qp_num = remote_qp_num,
-            .ah_attr =
-                {
-                    .grh {
-                        .dgid = gid,
-                        .flow_label = 0,
-                        .sgid_index = 0,
-                        .hop_limit = 255,
-                    },
-                    .dlid = lid,
-                    .is_global = 10,
-                    .port_num = 1,
-                },
-            .max_dest_rd_atomic = 16,
-            .min_rnr_timer = 0,
-        };
+        
+        ibv_qp_attr attr {};
+        attr.qp_state = ibv_qp_state::IBV_QPS_RTR;
+        attr.path_mtu = ibv_mtu::IBV_MTU_4096;
+        attr.rq_psn = remote_qp_num;
+        attr.dest_qp_num = remote_qp_num;
+        attr.ah_attr.grh.dgid = gid;
+        attr.ah_attr.grh.flow_label = 0;
+        attr.ah_attr.grh.sgid_index = 0;
+        attr.ah_attr.grh.hop_limit = 255;
+        attr.ah_attr.dlid = lid;
+        attr.ah_attr.is_global = 1;
+        attr.ah_attr.port_num = 1;
+        attr.max_dest_rd_atomic = 16;
+        attr.min_rnr_timer = 0;
+        
+        // ibv_qp_attr attr = {
+        //     .qp_state = ibv_qp_state::IBV_QPS_RTR,
+        //     .path_mtu = ibv_mtu::IBV_MTU_4096,
+        //     .rq_psn = remote_qp_num,
+        //     .dest_qp_num = remote_qp_num,
+        //     .ah_attr =
+        //         {
+        //             .grh {
+        //                 .dgid = gid,
+        //                 .flow_label = 0,
+        //                 .sgid_index = 0,
+        //                 .hop_limit = 255,
+        //             },
+        //             .dlid = lid,
+        //             .is_global = 1,
+        //             .port_num = 1,
+        //         },
+        //     .max_dest_rd_atomic = 16,
+        //     .min_rnr_timer = 0,
+        // };
 
         int ret = ibv_modify_qp(qp, &attr, mask);
         if (ret) {
@@ -287,14 +322,22 @@ int bring_up_rc(ibv_qp* qp, HandshakeData& data) {
             | ibv_qp_attr_mask::IBV_QP_RETRY_CNT | ibv_qp_attr_mask::IBV_QP_RNR_RETRY | ibv_qp_attr_mask::IBV_QP_SQ_PSN
             | ibv_qp_attr_mask::IBV_QP_MAX_QP_RD_ATOMIC;
 
-        ibv_qp_attr attr = {
-            .qp_state = ibv_qp_state::IBV_QPS_RTS,
-            .sq_psn = qp->qp_num,
-            .max_rd_atomic = 16,
-            .timeout = 14,
-            .retry_cnt = 7,
-            .rnr_retry = 7,
-        };
+        ibv_qp_attr attr {};
+        attr.qp_state = ibv_qp_state::IBV_QPS_RTS;
+        attr.sq_psn = qp->qp_num;
+        attr.max_rd_atomic = 16;
+        attr.timeout = 14;
+        attr.retry_cnt = 7;
+        attr.rnr_retry = 7;
+
+        // ibv_qp_attr attr = {
+        //     .qp_state = ibv_qp_state::IBV_QPS_RTS,
+        //     .sq_psn = qp->qp_num,
+        //     .max_rd_atomic = 16,
+        //     .timeout = 14,
+        //     .retry_cnt = 7,
+        //     .rnr_retry = 7,
+        // };
 
         int ret = ibv_modify_qp(qp, &attr, mask);
         if (ret) {
