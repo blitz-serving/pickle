@@ -3,10 +3,16 @@
 
 #include <infiniband/verbs.h>
 
+#include <atomic>
 #include <cstdint>
+#include <map>
 #include <memory>
+#include <queue>
 #include <string>
+#include <thread>
 #include <vector>
+
+#include "concurrentqueue.h"
 
 namespace rdma_util {
 
@@ -65,7 +71,7 @@ class Context {
 
     ~Context();
 
-    static std::shared_ptr<Context> create(const char* dev_name) noexcept(false);
+    static std::unique_ptr<Context> create(const char* dev_name) noexcept(false);
 };
 
 class ProtectionDomain {
@@ -87,7 +93,7 @@ class ProtectionDomain {
 
     ~ProtectionDomain();
 
-    static std::shared_ptr<ProtectionDomain> create(std::shared_ptr<Context> context) noexcept(false);
+    static std::unique_ptr<ProtectionDomain> create(std::shared_ptr<Context> context) noexcept(false);
 
     inline std::shared_ptr<Context> get_context() const {
         return this->context_;
@@ -114,9 +120,9 @@ class RcQueuePair {
 
     ~RcQueuePair();
 
-    static std::shared_ptr<RcQueuePair> create(const char* dev_name) noexcept(false);
-    static std::shared_ptr<RcQueuePair> create(std::shared_ptr<Context> context) noexcept(false);
-    static std::shared_ptr<RcQueuePair> create(std::shared_ptr<ProtectionDomain> pd) noexcept(false);
+    static std::unique_ptr<RcQueuePair> create(const char* dev_name) noexcept(false);
+    static std::unique_ptr<RcQueuePair> create(std::shared_ptr<Context> context) noexcept(false);
+    static std::unique_ptr<RcQueuePair> create(std::shared_ptr<ProtectionDomain> pd) noexcept(false);
 
     inline std::shared_ptr<ProtectionDomain> get_pd() const {
         return this->pd_;
@@ -189,9 +195,41 @@ class RcQueuePair {
      */
     int wait_until_recv_completion(const int expected_num_wcs, std::vector<WorkCompletion>& polled_wcs) noexcept;
 
+    /**
+     * @brief poll the send_cq once and return the number of polled work completions on success
+     * 
+     * @param max_num_wcs maximum number of work completions to poll
+     * @param polled_wcs return value to store the polled wr_ids and status
+     */
     int poll_send_cq_once(const int max_num_wcs, std::vector<WorkCompletion>& polled_wcs) noexcept;
 
+    /**
+     * @brief poll the recv_cq once and return the number of polled work completions on success
+     * 
+     * @param max_num_wcs maximum number of work completions to poll
+     * @param polled_wcs return value to store the polled wr_ids and status
+     */
     int poll_recv_cq_once(const int max_num_wcs, std::vector<WorkCompletion>& polled_wcs) noexcept;
+
+    /**
+     * UNSAFE: This function panics if the size of `wc_buffer` is less than the sizeof `ibv_wc[max_num_wcs]`
+     * @brief poll the send_cq once and return the number of polled work completions on success
+     * 
+     * @param max_num_wcs maximum number of work completions to poll
+     * @param wc_buffer work completion buffer. You must ensure that the buffer is larger than the sizeof `ibv_wc[max_num_wcs]`
+     * @param polled_wcs return value to store the polled wr_ids and status
+     */
+    int poll_send_cq_once(const int max_num_wcs, ibv_wc* wc_buffer, std::vector<WorkCompletion>& polled_wcs);
+
+    /**
+     * UNSAFE: This function panics if the size of `wc_buffer` is less than the sizeof `ibv_wc[max_num_wcs]`
+     * @brief poll the recv_cq once and return the number of polled work completions on success
+     * 
+     * @param max_num_wcs maximum number of work completions to poll
+     * @param wc_buffer work completion buffer. You must ensure that the buffer is larger than the sizeof `ibv_wc[max_num_wcs]`
+     * @param polled_wcs return value to store the polled wr_ids and status
+     */
+    int poll_recv_cq_once(const int max_num_wcs, ibv_wc* wc_buffer, std::vector<WorkCompletion>& polled_wcs);
 };
 
 class MemoryRegion {
@@ -214,7 +252,7 @@ class MemoryRegion {
 
     ~MemoryRegion();
 
-    static std::shared_ptr<MemoryRegion>
+    static std::unique_ptr<MemoryRegion>
     create(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false);
 
     inline uint32_t get_lkey() const {
@@ -234,28 +272,71 @@ class MemoryRegion {
     }
 };
 
-// struct WriteCommand {
-//     uint32_t identifier;
-//     uint32_t raddr;
-//     uint32_t rkey;
-//     uint32_t length;
-// };
+template<typename T>
+using Queue = std::shared_ptr<moodycamel::ConcurrentQueue<T>>;
 
-// static int
-// tccl_init(std::shared_ptr<RcQueuePair> qp, std::shared_ptr<MemoryRegion> host_buffer, uint64_t max_slot_num) noexcept(
-//     false
-// ) {
-//     auto buffer_size = host_buffer->get_length();
-//     auto buffer_addr = uint64_t(host_buffer->get_addr());
-//     auto chunksize = uint64_t(sizeof(WriteCommand));
-//     auto slot_num = buffer_size / chunksize <= max_slot_num ? buffer_size / chunksize : max_slot_num;
+struct Ticket {
+    uint32_t stream_id;
+    uint32_t length;
+    uint64_t addr;
+    uint64_t key;
 
-//     for (uint64_t slot_index = 0; slot_index < slot_num; ++slot_index) {
-//         qp->post_recv(slot_index, buffer_addr + slot_index * chunksize, chunksize, host_buffer->get_lkey());
-//     }
+    inline std::string to_string() const {
+        return "stream_id: " + std::to_string(stream_id) + ", length: " + std::to_string(length)
+            + ", addr: " + std::to_string(addr) + ", key: " + std::to_string(key);
+    }
+};
 
-//     return 0;
-// }
+using Command = std::tuple<Ticket, std::shared_ptr<std::atomic<int>>>;
+
+template<typename T>
+using MultiMap = std::map<uint32_t, std::queue<T>>;
+
+class TcclContext {
+  private:
+    Queue<Ticket> send_request_command_queue_;
+    Queue<Command> recv_request_command_queue_;
+
+    std::thread thread_post_send_;
+    std::thread thread_post_recv_;
+
+    uint8_t* host_send_buffer_raw_;
+    uint8_t* host_recv_buffer_raw_;
+
+    std::shared_ptr<std::atomic<bool>> finalized_;
+
+    TcclContext() = delete;
+    TcclContext(const TcclContext&) = delete;
+    TcclContext& operator=(const TcclContext&) = delete;
+
+    TcclContext(std::unique_ptr<RcQueuePair> qp);
+
+    static void thread_post_send(
+        std::shared_ptr<RcQueuePair> qp,
+        std::unique_ptr<MemoryRegion> host_send_buffer,
+        std::shared_ptr<std::atomic<bool>> finalized,
+        Queue<Ticket> local_send_request_queue,
+        Queue<Ticket> local_recv_request_queue,
+        Queue<Ticket> remote_recv_request_queue
+    ) noexcept(false);
+
+    static void thread_post_recv(
+        std::shared_ptr<RcQueuePair> qp,
+        std::unique_ptr<MemoryRegion> host_recv_buffer,
+        std::shared_ptr<std::atomic<bool>> finalized,
+        Queue<Command> recv_command_queue,
+        Queue<Ticket> local_recv_request_queue,
+        Queue<Ticket> remote_recv_request_queue
+    ) noexcept(false);
+
+  public:
+    static std::shared_ptr<TcclContext> create(std::unique_ptr<RcQueuePair> qp) noexcept(false);
+
+    void send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
+    void recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);
+
+    ~TcclContext();
+};
 
 }  // namespace rdma_util
 

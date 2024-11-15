@@ -11,12 +11,14 @@ option(BUILD_BENCHMARKS "Build benchmarks" ON)
 
 option(USE_CUDA "Use CUDA" ON)
 
+add_subdirectory(third_party/concurrentqueue)
+
 if(BUILD_TESTS)
     add_subdirectory(third_party/googletest)
 endif()
 
 add_library(rdma_util STATIC "src/rdma_util.cpp")
-target_link_libraries(rdma_util PUBLIC ibverbs)
+target_link_libraries(rdma_util PUBLIC ibverbs concurrentqueue)
 target_include_directories(rdma_util PUBLIC "include")
 
 if(USE_CUDA)

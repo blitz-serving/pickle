@@ -21,7 +21,7 @@ constexpr uint64_t kThreadNum = 1;
 
 constexpr const char* kRNIC1 = "mlx5_1";
 constexpr const char* kRNIC2 = "mlx5_5";
-constexpr uint32_t kGPU1 = 0;
+constexpr uint32_t kGPU1 = 2;
 constexpr uint32_t kGPU2 = 7;
 
 static std::atomic<uint64_t> g_bytes_transferred(0);
@@ -49,19 +49,20 @@ int main() {
         std::vector<std::shared_ptr<rdma_util::RcQueuePair>> qp_list_1;
         std::vector<std::shared_ptr<rdma_util::RcQueuePair>> qp_list_2;
 
-        auto context1 = rdma_util::Context::create(kRNIC1);
-        auto pd1 = rdma_util::ProtectionDomain::create(context1);
-        auto mr1 = rdma_util::MemoryRegion::create(pd1, send_buffer, kBufferSize);
-        printf("mr1: %p\n", mr1->get_addr());
+        std::shared_ptr<rdma_util::ProtectionDomain> pd1 =
+            rdma_util::ProtectionDomain::create(std::move(rdma_util::Context::create(kRNIC1)));
+        std::shared_ptr<rdma_util::MemoryRegion> mr1 = rdma_util::MemoryRegion::create(pd1, send_buffer, kBufferSize);
 
-        auto context2 = rdma_util::Context::create(kRNIC2);
-        auto pd2 = rdma_util::ProtectionDomain::create(context2);
-        auto mr2 = rdma_util::MemoryRegion::create(pd2, recv_buffer, kBufferSize);
+        std::shared_ptr<rdma_util::ProtectionDomain> pd2 =
+            rdma_util::ProtectionDomain::create(std::move(rdma_util::Context::create(kRNIC2)));
+        std::shared_ptr<rdma_util::MemoryRegion> mr2 = rdma_util::MemoryRegion::create(pd2, recv_buffer, kBufferSize);
+
+        printf("mr1: %p\n", mr1->get_addr());
         printf("mr2: %p\n", mr2->get_addr());
 
         for (int i = 0; i < kThreadNum; ++i) {
-            auto qp1 = rdma_util::RcQueuePair::create(pd1);
-            auto qp2 = rdma_util::RcQueuePair::create(pd2);
+            std::shared_ptr<rdma_util::RcQueuePair> qp1 = rdma_util::RcQueuePair::create(pd1);
+            std::shared_ptr<rdma_util::RcQueuePair> qp2 = rdma_util::RcQueuePair::create(pd2);
 
             qp1->bring_up(qp2->get_handshake_data());
             qp2->bring_up(qp1->get_handshake_data());

@@ -38,17 +38,17 @@ int main() {
 
         std::vector<std::thread> threads;
 
-        auto context1 = rdma_util::Context::create(kDevice1);
-        auto pd1 = rdma_util::ProtectionDomain::create(context1);
-        auto mr1 = rdma_util::MemoryRegion::create(pd1, send_buffer, kBufferSize);
+        std::shared_ptr<rdma_util::ProtectionDomain> pd1 =
+            rdma_util::ProtectionDomain::create(std::move(rdma_util::Context::create(kDevice1)));
+        std::shared_ptr<rdma_util::MemoryRegion> mr1 = rdma_util::MemoryRegion::create(pd1, send_buffer, kBufferSize);
 
-        auto context2 = rdma_util::Context::create(kDevice2);
-        auto pd2 = rdma_util::ProtectionDomain::create(context2);
-        auto mr2 = rdma_util::MemoryRegion::create(pd2, recv_buffer, kBufferSize);
+        std::shared_ptr<rdma_util::ProtectionDomain> pd2 =
+            rdma_util::ProtectionDomain::create(std::move(rdma_util::Context::create(kDevice2)));
+        std::shared_ptr<rdma_util::MemoryRegion> mr2 = rdma_util::MemoryRegion::create(pd2, recv_buffer, kBufferSize);
 
         for (int i = 0; i < kThreadNum; ++i) {
-            auto qp1 = rdma_util::RcQueuePair::create(pd1);
-            auto qp2 = rdma_util::RcQueuePair::create(pd2);
+            std::shared_ptr<rdma_util::RcQueuePair> qp1 = rdma_util::RcQueuePair::create(pd1);
+            std::shared_ptr<rdma_util::RcQueuePair> qp2 = rdma_util::RcQueuePair::create(pd2);
 
             qp1->bring_up(qp2->get_handshake_data());
             qp2->bring_up(qp1->get_handshake_data());

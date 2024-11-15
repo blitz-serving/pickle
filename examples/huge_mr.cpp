@@ -1,5 +1,6 @@
 
 #include <cstdio>
+#include <memory>
 
 #ifdef USE_CUDA
 
@@ -18,7 +19,8 @@ int main() {
     void* d_ptr = gpu_mem_util::malloc_gpu_buffer(kSize, kGPU);
 
     {
-        auto pd = rdma_util::ProtectionDomain::create(rdma_util::Context::create(kRNIC));
+        std::shared_ptr<rdma_util::ProtectionDomain> pd =
+            std::move(rdma_util::ProtectionDomain::create(rdma_util::Context::create(kRNIC)));
         auto mr = rdma_util::MemoryRegion::create(pd, d_ptr, kSize);
     }
 
