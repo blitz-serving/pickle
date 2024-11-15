@@ -26,7 +26,7 @@ int main() {
         }
 
         for (int i = 10; i < 20; ++i) {
-            if (qp->post_send(i, reinterpret_cast<uint64_t>(buffer) + i * 1024, 1024, mr->get_lkey(), true)) {
+            if (qp->post_send_send(i, reinterpret_cast<uint64_t>(buffer) + i * 1024, 1024, mr->get_lkey(), true)) {
                 printf("post_send failed\n");
                 return 1;
             }
@@ -41,6 +41,34 @@ int main() {
 
         qp->wait_until_recv_completion(10, polled_recv_wcs);
         for (const auto& wc : polled_recv_wcs) {
+            printf("success %s\n", wc.to_string().c_str());
+        }
+
+        qp->post_send_read(
+            20,
+            reinterpret_cast<uint64_t>(buffer) + 20 * 1024,
+            reinterpret_cast<uint64_t>(buffer) + 0 * 1024,
+            1024,
+            mr->get_lkey(),
+            mr->get_rkey(),
+            true
+        );
+        qp->wait_until_send_completion(1, polled_send_wcs);
+        for (const auto& wc : polled_send_wcs) {
+            printf("success %s\n", wc.to_string().c_str());
+        }
+
+        qp->post_send_write(
+            21,
+            reinterpret_cast<uint64_t>(buffer) + 21 * 1024,
+            reinterpret_cast<uint64_t>(buffer) + 0 * 1024,
+            1024,
+            mr->get_lkey(),
+            mr->get_rkey(),
+            true
+        );
+        qp->wait_until_send_completion(1, polled_send_wcs);
+        for (const auto& wc : polled_send_wcs) {
             printf("success %s\n", wc.to_string().c_str());
         }
     }

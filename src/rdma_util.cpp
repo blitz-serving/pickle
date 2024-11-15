@@ -36,7 +36,6 @@ Context::Context(const char* dev_name) noexcept(false) {
 }
 
 Context::~Context() {
-    printf("Context destructor\n");
     if (this->inner) {
         ibv_close_device(this->inner);
     }
@@ -59,7 +58,6 @@ std::shared_ptr<ProtectionDomain> ProtectionDomain::create(std::shared_ptr<Conte
 }
 
 ProtectionDomain::~ProtectionDomain() {
-    printf("ProtectionDomain destructor\n");
     if (this->inner) {
         ibv_dealloc_pd(this->inner);
     }
@@ -113,7 +111,6 @@ std::shared_ptr<RcQueuePair> RcQueuePair::create(std::shared_ptr<ProtectionDomai
 }
 
 RcQueuePair::~RcQueuePair() {
-    printf("RcQueuePair destructor\n");
     if (this->inner) {
         ibv_destroy_cq(this->inner->send_cq);
         ibv_destroy_cq(this->inner->recv_cq);
@@ -240,7 +237,7 @@ void RcQueuePair::bring_up(const HandshakeData& handshake_data) noexcept(false) 
     }
 }
 
-int RcQueuePair::post_send(uint64_t wr_id, uint64_t addr, uint32_t length, uint32_t lkey, bool signaled) noexcept {
+int RcQueuePair::post_send_send(uint64_t wr_id, uint64_t addr, uint32_t length, uint32_t lkey, bool signaled) noexcept {
     ibv_sge sge {};
     sge.addr = addr;
     sge.length = length;
@@ -252,6 +249,62 @@ int RcQueuePair::post_send(uint64_t wr_id, uint64_t addr, uint32_t length, uint3
     wr.num_sge = 1;
     wr.opcode = IBV_WR_SEND;
     wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
+    ibv_send_wr* bad_wr;
+    return ibv_post_send(this->inner, &wr, &bad_wr);
+}
+
+int RcQueuePair::post_send_read(
+    uint64_t wr_id,
+    uint64_t laddr,
+    uint64_t raddr,
+    uint32_t length,
+    uint32_t lkey,
+    uint32_t rkey,
+    bool signaled
+) noexcept {
+    ibv_sge sge {};
+    ibv_send_wr wr = {};
+
+    sge.addr = laddr;
+    sge.length = length;
+    sge.lkey = lkey;
+
+    wr.wr_id = wr_id;
+    wr.next = nullptr;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+    wr.opcode = IBV_WR_RDMA_READ;
+    wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
+    wr.wr.rdma.remote_addr = raddr;
+    wr.wr.rdma.rkey = rkey;
+    ibv_send_wr* bad_wr;
+    return ibv_post_send(this->inner, &wr, &bad_wr);
+}
+
+int RcQueuePair::post_send_write(
+    uint64_t wr_id,
+    uint64_t laddr,
+    uint64_t raddr,
+    uint32_t length,
+    uint32_t lkey,
+    uint32_t rkey,
+    bool signaled
+) noexcept {
+    ibv_sge sge {};
+    ibv_send_wr wr = {};
+
+    sge.addr = laddr;
+    sge.length = length;
+    sge.lkey = lkey;
+
+    wr.wr_id = wr_id;
+    wr.next = nullptr;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+    wr.opcode = IBV_WR_RDMA_WRITE;
+    wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
+    wr.wr.rdma.remote_addr = raddr;
+    wr.wr.rdma.rkey = rkey;
     ibv_send_wr* bad_wr;
     return ibv_post_send(this->inner, &wr, &bad_wr);
 }
@@ -336,6 +389,54 @@ int RcQueuePair::wait_until_recv_completion(
     return 0;
 }
 
+int RcQueuePair::poll_send_cq_once(const int max_num_wcs, std::vector<WorkCompletion>& polled_wcs) noexcept {
+    if (polled_wcs.size() > 0) {
+        polled_wcs.clear();
+    }
+
+    const int expected = max_num_wcs;
+    ibv_wc* work_completions = new ibv_wc[max_num_wcs];
+
+    int ret = ibv_poll_cq(this->inner->send_cq, max_num_wcs, work_completions);
+
+    if (ret > 0) {
+        for (int i = 0; i < ret; ++i) {
+            WorkCompletion work_completion {};
+            work_completion.status = work_completions[i].status;
+            work_completion.wr_id = work_completions[i].wr_id;
+            work_completion.bytes_transferred = work_completions[i].byte_len;
+            polled_wcs.push_back(work_completion);
+        }
+    }
+
+    delete[] work_completions;
+    return ret;
+}
+
+int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, std::vector<WorkCompletion>& polled_wcs) noexcept {
+    if (polled_wcs.size() > 0) {
+        polled_wcs.clear();
+    }
+
+    const int expected = max_num_wcs;
+    ibv_wc* work_completions = new ibv_wc[max_num_wcs];
+
+    int ret = ibv_poll_cq(this->inner->recv_cq, max_num_wcs, work_completions);
+
+    if (ret > 0) {
+        for (int i = 0; i < ret; ++i) {
+            WorkCompletion work_completion {};
+            work_completion.status = work_completions[i].status;
+            work_completion.wr_id = work_completions[i].wr_id;
+            work_completion.bytes_transferred = work_completions[i].byte_len;
+            polled_wcs.push_back(work_completion);
+        }
+    }
+
+    delete[] work_completions;
+    return ret;
+}
+
 MemoryRegion::MemoryRegion(std::shared_ptr<ProtectionDomain> pd, void* addr, size_t length) noexcept(false) {
     this->pd_ = pd;
     this->context_ = pd->context_;
@@ -352,7 +453,6 @@ MemoryRegion::MemoryRegion(std::shared_ptr<ProtectionDomain> pd, void* addr, siz
 }
 
 MemoryRegion::~MemoryRegion() {
-    printf("MemoryRegion destructor\n");
     if (this->inner) {
         ibv_dereg_mr(this->inner);
     }

@@ -126,7 +126,27 @@ class RcQueuePair {
 
     void bring_up(const HandshakeData& handshake_data) noexcept(false);
 
-    int post_send(uint64_t wr_id, uint64_t addr, uint32_t length, uint32_t lkey, bool signaled) noexcept;
+    int post_send_send(uint64_t wr_id, uint64_t addr, uint32_t length, uint32_t lkey, bool signaled) noexcept;
+
+    int post_send_read(
+        uint64_t wr_id,
+        uint64_t laddr,
+        uint64_t raddr,
+        uint32_t length,
+        uint32_t lkey,
+        uint32_t rkey,
+        bool signaled
+    ) noexcept;
+
+    int post_send_write(
+        uint64_t wr_id,
+        uint64_t laddr,
+        uint64_t raddr,
+        uint32_t length,
+        uint32_t lkey,
+        uint32_t rkey,
+        bool signaled
+    ) noexcept;
 
     int post_recv(uint64_t wr_id, uint64_t addr, uint32_t length, uint32_t lkey) noexcept;
 
@@ -151,6 +171,10 @@ class RcQueuePair {
      * https://www.rdmamojo.com/2013/02/15/ibv_poll_cq/ for more information.
      */
     int wait_until_recv_completion(const int expected_num_wcs, std::vector<WorkCompletion>& polled_wcs) noexcept;
+
+    int poll_send_cq_once(const int max_num_wcs, std::vector<WorkCompletion>& polled_wcs) noexcept;
+
+    int poll_recv_cq_once(const int max_num_wcs, std::vector<WorkCompletion>& polled_wcs) noexcept;
 };
 
 class MemoryRegion {

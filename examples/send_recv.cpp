@@ -9,8 +9,8 @@ int main() {
     auto buffer = new uint8_t[size];
 
     {
-        auto qp1 = rdma_util::RcQueuePair::create("mlx5_0");
-        auto qp2 = rdma_util::RcQueuePair::create("mlx5_1");
+        auto qp1 = rdma_util::RcQueuePair::create("mlx5_3");
+        auto qp2 = rdma_util::RcQueuePair::create("mlx5_4");
 
         auto mr1 = rdma_util::MemoryRegion::create(qp1->get_pd(), buffer, size);
         auto mr2 = rdma_util::MemoryRegion::create(qp2->get_pd(), buffer, size);
@@ -31,7 +31,7 @@ int main() {
             printf("post_recv failed\n");
             return 1;
         }
-        if (qp2->post_send(1, reinterpret_cast<uint64_t>(buffer), 512, mr2->get_lkey(), true)) {
+        if (qp2->post_send_send(1, reinterpret_cast<uint64_t>(buffer), 512, mr2->get_lkey(), true)) {
             printf("post_send failed\n");
             return 1;
         }
