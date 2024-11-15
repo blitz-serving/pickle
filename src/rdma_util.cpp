@@ -20,7 +20,7 @@
 
 namespace rdma_util {
 
-constexpr uint64_t kSlotNum = 64;
+constexpr uint64_t kSlotNum = 32;
 constexpr uint64_t kHostBufferSize = sizeof(Ticket) * kSlotNum;
 
 Context::Context(const char* dev_name) noexcept(false) {
@@ -624,6 +624,8 @@ void TcclContext::thread_post_send(
 
     std::queue<uint64_t> free_post_send_send_slots;
 
+    uint64_t incremented_write_imm_id = kSlotNum;
+
     uint64_t post_send_write_slot_available = kSlotNum;
     uint64_t post_send_send_slot_available = kSlotNum;
     for (uint64_t wr_id = 0; wr_id < kSlotNum; ++wr_id) {
@@ -658,6 +660,8 @@ void TcclContext::thread_post_send(
             pending_local_recv_request_queue.pop();
             memcpy(reinterpret_cast<void*>(buffer_addr + wr_id * chunksize), &ticket, sizeof(Ticket));
             // Tell the remote side (sender) receiver information
+
+            // printf("post_send_send: wr_id %lu stream_id %u\n", wr_id, ticket.stream_id);
             qp->post_send_send(wr_id, buffer_addr + wr_id * chunksize, chunksize, host_send_buffer->get_lkey(), true);
         }
 
@@ -676,11 +680,14 @@ void TcclContext::thread_post_send(
                     throw std::runtime_error("Length mismatch");
                 }
 
-                auto wr_id = kSlotNum + 1;
+                auto wr_id = incremented_write_imm_id;
                 auto raddr = remote_recv_request.addr;
                 auto rkey = remote_recv_request.key;
                 auto laddr = local_send_request.addr;
                 auto lkey = local_send_request.key;
+                incremented_write_imm_id++;
+
+                // printf("post_send_write: %lu %u %lu %lu %u %u\n", wr_id, stream_id, raddr, laddr, rkey, lkey);
 
                 qp->post_send_write_with_imm(
                     wr_id,
@@ -703,11 +710,14 @@ void TcclContext::thread_post_send(
         } else if (ret > 0) {
             for (const auto& wc : polled_send_wcs) {
                 if (wc.status != IBV_WC_SUCCESS) {
+                    // printf("Failed wc: %s\n", wc.to_string().c_str());
                     throw std::runtime_error("Failed to send data");
                 } else if (wc.opcode == IBV_WC_SEND) {
+                    // printf("Polled IBV_WC_SEND wc: %s\n", wc.to_string().c_str());
                     free_post_send_send_slots.push(wc.wr_id);
                     post_send_send_slot_available++;
                 } else if (wc.opcode == IBV_WC_RDMA_WRITE) {
+                    // printf("Polled IBV_WC_RDMA_WRITE wc: %s\n", wc.to_string().c_str());
                     post_send_write_slot_available++;
                 }
             }
@@ -759,13 +769,16 @@ void TcclContext::thread_post_recv(
                 } else {
                     auto wr_id = wc.wr_id;
                     if (wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+                        // printf("Polled IBV_WC_RECV_RDMA_WITH_IMM wc: %s\n", wc.to_string().c_str());
                         std::queue<std::shared_ptr<std::atomic<int>>>& queue =
                             pending_local_recv_request_map[wc.imm_data];
                         queue.front()->store(1);
                         queue.pop();
                     } else {
+                        // printf("Polled IBV_WC_RECV wc: %s\n", wc.to_string().c_str());
                         Ticket ticket {};
                         memcpy(&ticket, reinterpret_cast<void*>(buffer_addr + wr_id * chunksize), chunksize);
+                        // printf("Polled Ticket: stream_id %u\n", ticket.stream_id);
                         remote_recv_request_queue->enqueue(ticket);
                     }
                     qp->post_recv(wr_id, buffer_addr + wr_id * chunksize, chunksize, host_recv_buffer->get_lkey());

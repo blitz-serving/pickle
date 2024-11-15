@@ -279,7 +279,7 @@ struct Ticket {
     uint32_t stream_id;
     uint32_t length;
     uint64_t addr;
-    uint64_t key;
+    uint32_t key;
 
     inline std::string to_string() const {
         return "stream_id: " + std::to_string(stream_id) + ", length: " + std::to_string(length)

@@ -22,4 +22,8 @@ void free_gpu_buffer(void* d_ptr, uint32_t device) noexcept {
     cudaFree(d_ptr);
 }
 
+void set_device(uint32_t device) noexcept {
+    cudaSetDevice(device);
+}
+
 }  // namespace gpu_mem_util
