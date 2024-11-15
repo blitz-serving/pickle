@@ -4,7 +4,6 @@
 #include <infiniband/verbs.h>
 
 #include <cstdint>
-#include <cstdio>
 #include <memory>
 #include <string>
 #include <vector>
@@ -26,14 +25,21 @@ enum QueuePairState {
 };
 
 struct WorkCompletion {
-    // See ibv_wc_status for detailed meaining of status
-    int32_t status;
     uint64_t wr_id;
-    uint32_t bytes_transferred;
+
+    // See ibv_wc_status for detailed meaining of status
+    uint32_t status;
+
+    uint32_t byte_len;
+
+    // See ibv_wc_status for detailed meaining of status
+    uint32_t opcode;
+    uint32_t imm_data;
 
     inline std::string to_string() const {
-        return "WorkCompletion { status: " + std::to_string(status) + ", wr_id: " + std::to_string(wr_id)
-            + ", bytes_transferred: " + std::to_string(bytes_transferred) + " }";
+        return "wr_id: " + std::to_string(wr_id) + ", status: " + std::to_string(status)
+            + ", byte_len: " + std::to_string(byte_len) + ", opcode: " + std::to_string(opcode)
+            + ", imm_data: " + std::to_string(imm_data);
     }
 };
 
@@ -148,6 +154,17 @@ class RcQueuePair {
         bool signaled
     ) noexcept;
 
+    int post_send_write_with_imm(
+        uint64_t wr_id,
+        uint64_t laddr,
+        uint64_t raddr,
+        uint32_t length,
+        uint32_t imm,
+        uint32_t lkey,
+        uint32_t rkey,
+        bool signaled
+    ) noexcept;
+
     int post_recv(uint64_t wr_id, uint64_t addr, uint32_t length, uint32_t lkey) noexcept;
 
     /**
@@ -188,7 +205,7 @@ class MemoryRegion {
     std::shared_ptr<ProtectionDomain> pd_;
     std::shared_ptr<Context> context_;
 
-    MemoryRegion(std::shared_ptr<ProtectionDomain> pd, void* addr, size_t length) noexcept(false);
+    MemoryRegion(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false);
 
   public:
     MemoryRegion() = delete;
@@ -198,7 +215,7 @@ class MemoryRegion {
     ~MemoryRegion();
 
     static std::shared_ptr<MemoryRegion>
-    create(std::shared_ptr<ProtectionDomain> pd, void* addr, size_t length) noexcept(false);
+    create(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false);
 
     inline uint32_t get_lkey() const {
         return this->inner->lkey;
@@ -216,6 +233,29 @@ class MemoryRegion {
         return this->inner->length;
     }
 };
+
+// struct WriteCommand {
+//     uint32_t identifier;
+//     uint32_t raddr;
+//     uint32_t rkey;
+//     uint32_t length;
+// };
+
+// static int
+// tccl_init(std::shared_ptr<RcQueuePair> qp, std::shared_ptr<MemoryRegion> host_buffer, uint64_t max_slot_num) noexcept(
+//     false
+// ) {
+//     auto buffer_size = host_buffer->get_length();
+//     auto buffer_addr = uint64_t(host_buffer->get_addr());
+//     auto chunksize = uint64_t(sizeof(WriteCommand));
+//     auto slot_num = buffer_size / chunksize <= max_slot_num ? buffer_size / chunksize : max_slot_num;
+
+//     for (uint64_t slot_index = 0; slot_index < slot_num; ++slot_index) {
+//         qp->post_recv(slot_index, buffer_addr + slot_index * chunksize, chunksize, host_buffer->get_lkey());
+//     }
+
+//     return 0;
+// }
 
 }  // namespace rdma_util
 

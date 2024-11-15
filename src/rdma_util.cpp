@@ -1,7 +1,9 @@
 #include "rdma_util.h"
 
 #include <infiniband/verbs.h>
+#include <netinet/in.h>
 
+#include <cstdint>
 #include <cstdio>
 #include <stdexcept>
 
@@ -242,7 +244,7 @@ int RcQueuePair::post_send_send(uint64_t wr_id, uint64_t addr, uint32_t length, 
     sge.addr = addr;
     sge.length = length;
     sge.lkey = lkey;
-    ibv_send_wr wr = {};
+    ibv_send_wr wr {};
     wr.wr_id = wr_id;
     wr.next = nullptr;
     wr.sg_list = &sge;
@@ -263,7 +265,8 @@ int RcQueuePair::post_send_read(
     bool signaled
 ) noexcept {
     ibv_sge sge {};
-    ibv_send_wr wr = {};
+    ibv_send_wr wr {};
+    ibv_send_wr* bad_wr = nullptr;
 
     sge.addr = laddr;
     sge.length = length;
@@ -277,7 +280,7 @@ int RcQueuePair::post_send_read(
     wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
     wr.wr.rdma.remote_addr = raddr;
     wr.wr.rdma.rkey = rkey;
-    ibv_send_wr* bad_wr;
+
     return ibv_post_send(this->inner, &wr, &bad_wr);
 }
 
@@ -291,7 +294,8 @@ int RcQueuePair::post_send_write(
     bool signaled
 ) noexcept {
     ibv_sge sge {};
-    ibv_send_wr wr = {};
+    ibv_send_wr wr {};
+    ibv_send_wr* bad_wr = nullptr;
 
     sge.addr = laddr;
     sge.length = length;
@@ -305,6 +309,36 @@ int RcQueuePair::post_send_write(
     wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
     wr.wr.rdma.remote_addr = raddr;
     wr.wr.rdma.rkey = rkey;
+
+    return ibv_post_send(this->inner, &wr, &bad_wr);
+}
+
+int RcQueuePair::post_send_write_with_imm(
+    uint64_t wr_id,
+    uint64_t laddr,
+    uint64_t raddr,
+    uint32_t length,
+    uint32_t imm,
+    uint32_t lkey,
+    uint32_t rkey,
+    bool signaled
+) noexcept {
+    ibv_sge sge {};
+    ibv_send_wr wr {};
+
+    sge.addr = laddr;
+    sge.length = length;
+    sge.lkey = lkey;
+
+    wr.wr_id = wr_id;
+    wr.next = nullptr;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+    wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+    wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
+    wr.wr.rdma.remote_addr = raddr;
+    wr.wr.rdma.rkey = rkey;
+    wr.imm_data = htonl(imm);
     ibv_send_wr* bad_wr;
     return ibv_post_send(this->inner, &wr, &bad_wr);
 }
@@ -314,7 +348,7 @@ int RcQueuePair::post_recv(uint64_t wr_id, uint64_t addr, uint32_t length, uint3
     sge.addr = addr;
     sge.length = length;
     sge.lkey = lkey;
-    ibv_recv_wr wr = {};
+    ibv_recv_wr wr {};
     wr.wr_id = wr_id;
     wr.next = nullptr;
     wr.sg_list = &sge;
@@ -341,9 +375,11 @@ int RcQueuePair::wait_until_send_completion(
         if (ret > 0) {
             for (int i = 0; i < ret; ++i) {
                 WorkCompletion work_completion {};
-                work_completion.status = work_completions[i].status;
                 work_completion.wr_id = work_completions[i].wr_id;
-                work_completion.bytes_transferred = work_completions[i].byte_len;
+                work_completion.status = work_completions[i].status;
+                work_completion.byte_len = work_completions[i].byte_len;
+                work_completion.opcode = work_completions[i].opcode;
+                work_completion.imm_data = ntohl(work_completions[i].imm_data);
                 polled_wcs.push_back(work_completion);
             }
             num_polled_completions += ret;
@@ -374,9 +410,11 @@ int RcQueuePair::wait_until_recv_completion(
         if (ret > 0) {
             for (int i = 0; i < ret; ++i) {
                 WorkCompletion work_completion {};
-                work_completion.status = work_completions[i].status;
                 work_completion.wr_id = work_completions[i].wr_id;
-                work_completion.bytes_transferred = work_completions[i].byte_len;
+                work_completion.status = work_completions[i].status;
+                work_completion.byte_len = work_completions[i].byte_len;
+                work_completion.opcode = work_completions[i].opcode;
+                work_completion.imm_data = ntohl(work_completions[i].imm_data);
                 polled_wcs.push_back(work_completion);
             }
             num_polled_completions += ret;
@@ -402,9 +440,11 @@ int RcQueuePair::poll_send_cq_once(const int max_num_wcs, std::vector<WorkComple
     if (ret > 0) {
         for (int i = 0; i < ret; ++i) {
             WorkCompletion work_completion {};
-            work_completion.status = work_completions[i].status;
             work_completion.wr_id = work_completions[i].wr_id;
-            work_completion.bytes_transferred = work_completions[i].byte_len;
+            work_completion.status = work_completions[i].status;
+            work_completion.byte_len = work_completions[i].byte_len;
+            work_completion.opcode = work_completions[i].opcode;
+            work_completion.imm_data = ntohl(work_completions[i].imm_data);
             polled_wcs.push_back(work_completion);
         }
     }
@@ -426,9 +466,11 @@ int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, std::vector<WorkComple
     if (ret > 0) {
         for (int i = 0; i < ret; ++i) {
             WorkCompletion work_completion {};
-            work_completion.status = work_completions[i].status;
             work_completion.wr_id = work_completions[i].wr_id;
-            work_completion.bytes_transferred = work_completions[i].byte_len;
+            work_completion.status = work_completions[i].status;
+            work_completion.byte_len = work_completions[i].byte_len;
+            work_completion.opcode = work_completions[i].opcode;
+            work_completion.imm_data = ntohl(work_completions[i].imm_data);
             polled_wcs.push_back(work_completion);
         }
     }
@@ -437,7 +479,7 @@ int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, std::vector<WorkComple
     return ret;
 }
 
-MemoryRegion::MemoryRegion(std::shared_ptr<ProtectionDomain> pd, void* addr, size_t length) noexcept(false) {
+MemoryRegion::MemoryRegion(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false) {
     this->pd_ = pd;
     this->context_ = pd->context_;
     this->inner = ibv_reg_mr(
@@ -459,7 +501,7 @@ MemoryRegion::~MemoryRegion() {
 }
 
 std::shared_ptr<MemoryRegion>
-MemoryRegion::create(std::shared_ptr<ProtectionDomain> pd, void* addr, size_t length) noexcept(false) {
+MemoryRegion::create(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false) {
     return std::shared_ptr<MemoryRegion>(new MemoryRegion(pd, addr, length));
 }
 

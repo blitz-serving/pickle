@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <vector>
 
@@ -70,6 +71,28 @@ int main() {
         qp->wait_until_send_completion(1, polled_send_wcs);
         for (const auto& wc : polled_send_wcs) {
             printf("success %s\n", wc.to_string().c_str());
+        }
+
+        qp->post_recv(22, reinterpret_cast<uint64_t>(buffer), 1024, mr->get_lkey());
+        qp->post_send_write_with_imm(
+            22,
+            reinterpret_cast<uint64_t>(buffer),
+            reinterpret_cast<uint64_t>(buffer),
+            1024,
+            1234,
+            mr->get_lkey(),
+            mr->get_rkey(),
+            true
+        );
+
+        qp->wait_until_send_completion(1, polled_send_wcs);
+        for (const auto& wc : polled_send_wcs) {
+            printf("%s\n", wc.to_string().c_str());
+        }
+
+        qp->wait_until_recv_completion(1, polled_recv_wcs);
+        for (const auto& wc : polled_recv_wcs) {
+            printf("%s\n", wc.to_string().c_str());
         }
     }
 
