@@ -351,21 +351,19 @@ class TcclContext {
     std::thread thread_post_send_;
     std::thread thread_post_recv_;
 
-    // Only used in V2 API
-    void* device_send_buffer_raw_;
-    void* device_recv_buffer_raw_;
-    mem_cpy_fp mem_cpy_fp_;
-
     std::shared_ptr<std::atomic<bool>> finalized_;
+
+    // API
+    TcclContextAPI api_version_;
 
     TcclContext() = delete;
     TcclContext(const TcclContext&) = delete;
     TcclContext& operator=(const TcclContext&) = delete;
 
-    TcclContext(std::unique_ptr<RcQueuePair> qp, TcclContextAPI api) noexcept(false);
+    // V1 constructor
+    TcclContext(std::unique_ptr<RcQueuePair> qp) noexcept(false);
 
     void initialize_v1(std::unique_ptr<RcQueuePair> qp) noexcept(false);
-    void initialize_v2(std::unique_ptr<RcQueuePair> qp) noexcept(false);
 
     static void thread_post_send_v1(
         std::shared_ptr<RcQueuePair> qp,
@@ -385,12 +383,53 @@ class TcclContext {
         Queue<Ticket> remote_recv_request_queue
     ) noexcept(false);
 
-  public:
-    static std::shared_ptr<TcclContext>
-    create(std::unique_ptr<RcQueuePair> qp, TcclContextAPI api = TcclContextAPI::V1) noexcept(false);
+    // V2 constructtor
+    TcclContext(
+        std::unique_ptr<RcQueuePair> qp,
+        std::shared_ptr<MemoryRegion> device_send_buffer,
+        std::shared_ptr<MemoryRegion> device_recv_buffer,
+        mem_cpy_fp mem_cpy_func
+    ) noexcept(false);
 
-    void send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
-    void recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);
+    // V2
+    void initialize_v2(
+        std::unique_ptr<RcQueuePair> qp,
+        std::shared_ptr<MemoryRegion> device_send_buffer,
+        std::shared_ptr<MemoryRegion> device_recv_buffer,
+        mem_cpy_fp mem_cpy_func
+    ) noexcept(false);
+
+    static void thread_post_send_v2(
+        std::shared_ptr<RcQueuePair> qp,
+        std::shared_ptr<MemoryRegion> device_send_buffer,
+        std::shared_ptr<std::atomic<bool>> finalized,
+        mem_cpy_fp mem_cpy_func,
+        Queue<Ticket> local_send_request_queue
+    ) noexcept(false);
+
+    static void thread_post_recv_v2(
+        std::shared_ptr<RcQueuePair> qp,
+        std::shared_ptr<MemoryRegion> device_recv_buffer,
+        std::shared_ptr<std::atomic<bool>> finalized,
+        mem_cpy_fp mem_cpy_func,
+        Queue<Command> recv_command_queue
+    ) noexcept(false);
+
+  public:
+    static std::shared_ptr<TcclContext> create_v1(std::unique_ptr<RcQueuePair> qp) noexcept(false);
+
+    static std::shared_ptr<TcclContext> create_v2(
+        std::unique_ptr<RcQueuePair> qp,
+        std::shared_ptr<MemoryRegion> device_send_buffer,
+        std::shared_ptr<MemoryRegion> device_recv_buffer,
+        mem_cpy_fp mem_cpy_func
+    ) noexcept(false);
+
+    void send_v1(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
+    void recv_v1(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);
+
+    void send_v2(uint32_t stream_id, uint64_t addr, uint32_t length);
+    void recv_v2(uint32_t stream_id, uint64_t addr, uint32_t length);
 
     ~TcclContext();
 };
