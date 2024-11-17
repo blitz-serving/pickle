@@ -417,7 +417,10 @@ class TcclContext {
 
   public:
     static std::shared_ptr<TcclContext> create_v1(std::unique_ptr<RcQueuePair> qp) noexcept(false);
+    void send_v1(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
+    void recv_v1(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);
 
+    [[deprecated("V2 API is unrecommended. Use create_v1 instead.")]]
     static std::shared_ptr<TcclContext> create_v2(
         std::unique_ptr<RcQueuePair> qp,
         std::shared_ptr<MemoryRegion> device_send_buffer,
@@ -425,10 +428,10 @@ class TcclContext {
         mem_cpy_fp mem_cpy_func
     ) noexcept(false);
 
-    void send_v1(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
-    void recv_v1(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);
-
+    [[deprecated("V2 API is unrecommended. Use send_v1 instead.")]]
     void send_v2(uint32_t stream_id, uint64_t addr, uint32_t length);
+
+    [[deprecated("V2 API is unrecommended. Use recv_v1 instead.")]]
     void recv_v2(uint32_t stream_id, uint64_t addr, uint32_t length);
 
     ~TcclContext();
