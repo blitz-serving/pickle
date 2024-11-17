@@ -20,7 +20,7 @@
 
 namespace rdma_util {
 
-constexpr uint64_t kSlotNum = 32;
+constexpr uint64_t kSlotNum = 1;
 constexpr uint64_t kHostBufferSize = sizeof(Ticket) * kSlotNum;
 
 Context::Context(const char* dev_name) noexcept(false) {
@@ -253,19 +253,55 @@ void RcQueuePair::bring_up(const HandshakeData& handshake_data) noexcept(false) 
     }
 }
 
-int RcQueuePair::post_send_send(uint64_t wr_id, uint64_t addr, uint32_t length, uint32_t lkey, bool signaled) noexcept {
+int RcQueuePair::post_send_send(
+    uint64_t wr_id,
+    uint64_t laddr,
+    uint32_t length,
+    uint32_t lkey,
+    bool signaled
+) noexcept {
     ibv_sge sge {};
-    sge.addr = addr;
+    ibv_send_wr wr {};
+    ibv_send_wr* bad_wr;
+
+    sge.addr = laddr;
     sge.length = length;
     sge.lkey = lkey;
-    ibv_send_wr wr {};
+
     wr.wr_id = wr_id;
     wr.next = nullptr;
     wr.sg_list = &sge;
     wr.num_sge = 1;
     wr.opcode = IBV_WR_SEND;
     wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
-    ibv_send_wr* bad_wr;
+
+    return ibv_post_send(this->inner, &wr, &bad_wr);
+}
+
+int RcQueuePair::post_send_send_with_imm(
+    uint64_t wr_id,
+    uint64_t laddr,
+    uint32_t length,
+    uint32_t lkey,
+    uint32_t imm,
+    bool signaled
+) noexcept {
+    ibv_sge sge {};
+    ibv_send_wr wr {};
+    ibv_send_wr* bad_wr = nullptr;
+
+    sge.addr = laddr;
+    sge.length = length;
+    sge.lkey = lkey;
+
+    wr.wr_id = wr_id;
+    wr.next = nullptr;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+    wr.opcode = IBV_WR_SEND_WITH_IMM;
+    wr.imm_data = htonl(imm);
+    wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
+
     return ibv_post_send(this->inner, &wr, &bad_wr);
 }
 
@@ -339,6 +375,7 @@ int RcQueuePair::post_send_write_with_imm(
 ) noexcept {
     ibv_sge sge {};
     ibv_send_wr wr {};
+    ibv_send_wr* bad_wr = nullptr;
 
     sge.addr = laddr;
     sge.length = length;
@@ -353,21 +390,24 @@ int RcQueuePair::post_send_write_with_imm(
     wr.wr.rdma.remote_addr = raddr;
     wr.wr.rdma.rkey = rkey;
     wr.imm_data = htonl(imm);
-    ibv_send_wr* bad_wr;
+
     return ibv_post_send(this->inner, &wr, &bad_wr);
 }
 
 int RcQueuePair::post_recv(uint64_t wr_id, uint64_t addr, uint32_t length, uint32_t lkey) noexcept {
     ibv_sge sge {};
+    ibv_recv_wr wr {};
+    ibv_recv_wr* bad_wr = nullptr;
+
     sge.addr = addr;
     sge.length = length;
     sge.lkey = lkey;
-    ibv_recv_wr wr {};
+
     wr.wr_id = wr_id;
     wr.next = nullptr;
     wr.sg_list = &sge;
     wr.num_sge = 1;
-    ibv_recv_wr* bad_wr;
+
     return ibv_post_recv(this->inner, &wr, &bad_wr);
 }
 
@@ -543,7 +583,30 @@ int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, ibv_wc* wc_buffer, std
     return ret;
 }
 
+MemoryRegion::MemoryRegion(
+    std::shared_ptr<ProtectionDomain> pd,
+    std::shared_ptr<void> buffer_with_deleter,
+    uint64_t length
+) noexcept(false) {
+    auto addr = buffer_with_deleter.get();
+
+    this->inner_buffer_with_deleter_ = buffer_with_deleter;
+    this->pd_ = pd;
+    this->context_ = pd->context_;
+    this->inner = ibv_reg_mr(
+        pd->inner,
+        addr,
+        length,
+        ibv_access_flags::IBV_ACCESS_LOCAL_WRITE | ibv_access_flags::IBV_ACCESS_REMOTE_WRITE
+            | ibv_access_flags::IBV_ACCESS_REMOTE_READ
+    );
+    if (this->inner == nullptr) {
+        throw std::runtime_error("Failed to register memory region");
+    }
+}
+
 MemoryRegion::MemoryRegion(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false) {
+    this->inner_buffer_with_deleter_ = nullptr;
     this->pd_ = pd;
     this->context_ = pd->context_;
     this->inner = ibv_reg_mr(
@@ -564,13 +627,21 @@ MemoryRegion::~MemoryRegion() {
     }
 }
 
+std::unique_ptr<MemoryRegion> MemoryRegion::create(
+    std::shared_ptr<ProtectionDomain> pd,
+    std::shared_ptr<void> buffer_with_deleter,
+    uint64_t length
+) noexcept(false) {
+    return std::unique_ptr<MemoryRegion>(new MemoryRegion(pd, buffer_with_deleter, length));
+}
+
 std::unique_ptr<MemoryRegion>
 MemoryRegion::create(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false) {
     return std::unique_ptr<MemoryRegion>(new MemoryRegion(pd, addr, length));
 }
 
-std::shared_ptr<TcclContext> TcclContext::create(std::unique_ptr<RcQueuePair> qp) noexcept(false) {
-    return std::shared_ptr<TcclContext>(new TcclContext(std::move(qp)));
+std::shared_ptr<TcclContext> TcclContext::create(std::unique_ptr<RcQueuePair> qp, TcclContextAPI api) noexcept(false) {
+    return std::shared_ptr<TcclContext>(new TcclContext(std::move(qp), api));
 }
 
 void TcclContext::send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey) {
@@ -599,7 +670,7 @@ void TcclContext::recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint3
 // local_send_request_queue is received from Send Request like NcclSend
 // local_recv_request_queue is received from Recv Request like NcclRecv
 // remote_recv_request_queue is received from remote side sender.
-void TcclContext::thread_post_send(
+void TcclContext::thread_post_send_v1(
     std::shared_ptr<RcQueuePair> qp,
     std::unique_ptr<MemoryRegion> host_send_buffer,
     std::shared_ptr<std::atomic<bool>> finalized,
@@ -727,7 +798,7 @@ void TcclContext::thread_post_send(
     delete[] wc_buffer;
 }
 
-void TcclContext::thread_post_recv(
+void TcclContext::thread_post_recv_v1(
     std::shared_ptr<RcQueuePair> qp,
     std::unique_ptr<MemoryRegion> host_recv_buffer,
     std::shared_ptr<std::atomic<bool>> finalized,
@@ -746,7 +817,7 @@ void TcclContext::thread_post_recv(
     std::vector<WorkCompletion> polled_recv_wcs;
     polled_recv_wcs.reserve(kSlotNum);
 
-    ibv_wc* wc_buffer = new ibv_wc[kSlotNum];
+    ibv_wc* wc_buffer = new ibv_wc[2 * kSlotNum];
 
     uint64_t count_dequeued = 0;
     Command command;
@@ -761,7 +832,7 @@ void TcclContext::thread_post_recv(
             pending_local_recv_request_map[ticket.stream_id].push(flag);
         }
 
-        int ret = qp->poll_recv_cq_once(kSlotNum, wc_buffer, polled_recv_wcs);
+        int ret = qp->poll_recv_cq_once(2 * kSlotNum, wc_buffer, polled_recv_wcs);
         if (ret > 0) {
             for (const auto& wc : polled_recv_wcs) {
                 if (wc.status != IBV_WC_SUCCESS) {
@@ -792,12 +863,22 @@ void TcclContext::thread_post_recv(
     delete[] wc_buffer;
 }
 
-TcclContext::TcclContext(std::unique_ptr<RcQueuePair> qp) noexcept(false) {
-    auto host_send_buffer_raw = new uint8_t[kHostBufferSize];
-    auto host_recv_buffer_raw = new uint8_t[kHostBufferSize];
+TcclContext::TcclContext(std::unique_ptr<RcQueuePair> qp, TcclContextAPI api) noexcept(false) {
+    if (api == TcclContextAPI::V1) {
+        this->initialize_v1(std::move(qp));
+    } else if (api == TcclContextAPI::V2) {
+        this->initialize_v2(std::move(qp));
+    } else {
+        throw std::runtime_error("Unsupported API version");
+    }
+}
 
-    auto host_send_buffer = MemoryRegion::create(qp->get_pd(), host_send_buffer_raw, kHostBufferSize);
-    auto host_recv_buffer = MemoryRegion::create(qp->get_pd(), host_recv_buffer_raw, kHostBufferSize);
+void TcclContext::initialize_v1(std::unique_ptr<RcQueuePair> qp) noexcept(false) {
+    auto host_send_buffer = std::shared_ptr<void>(new Ticket[kSlotNum], [](Ticket* p) { delete[] p; });
+    auto host_recv_buffer = std::shared_ptr<void>(new Ticket[kSlotNum], [](Ticket* p) { delete[] p; });
+
+    auto host_send_buffer_mr = MemoryRegion::create(qp->get_pd(), host_send_buffer, kHostBufferSize);
+    auto host_recv_buffer_mr = MemoryRegion::create(qp->get_pd(), host_recv_buffer, kHostBufferSize);
 
     std::shared_ptr<std::atomic<bool>> finalized = std::make_shared<std::atomic<bool>>(false);
 
@@ -809,9 +890,9 @@ TcclContext::TcclContext(std::unique_ptr<RcQueuePair> qp) noexcept(false) {
     std::shared_ptr<RcQueuePair> shared_qp = std::move(qp);
 
     std::thread t1(
-        thread_post_send,
+        thread_post_send_v1,
         shared_qp,
-        std::move(host_send_buffer),
+        std::move(host_send_buffer_mr),
         finalized,
         local_send_request_queue,
         local_recv_request_queue,
@@ -819,9 +900,9 @@ TcclContext::TcclContext(std::unique_ptr<RcQueuePair> qp) noexcept(false) {
     );
 
     std::thread t2(
-        thread_post_recv,
+        thread_post_recv_v1,
         shared_qp,
-        std::move(host_recv_buffer),
+        std::move(host_recv_buffer_mr),
         finalized,
         recv_command_queue,
         local_recv_request_queue,
@@ -833,16 +914,14 @@ TcclContext::TcclContext(std::unique_ptr<RcQueuePair> qp) noexcept(false) {
     this->recv_request_command_queue_ = std::move(recv_command_queue);
     this->send_request_command_queue_ = std::move(local_send_request_queue);
     this->finalized_ = finalized;
-    this->host_send_buffer_raw_ = host_send_buffer_raw;
-    this->host_recv_buffer_raw_ = host_recv_buffer_raw;
 }
+
+void TcclContext::initialize_v2(std::unique_ptr<RcQueuePair> qp) noexcept(false) {}
 
 TcclContext::~TcclContext() {
     this->finalized_->store(true);
     this->thread_post_send_.join();
     this->thread_post_recv_.join();
-    delete[] this->host_send_buffer_raw_;
-    delete[] this->host_recv_buffer_raw_;
 }
 
 }  // namespace rdma_util

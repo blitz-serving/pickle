@@ -14,6 +14,8 @@
 
 #include "concurrentqueue.h"
 
+typedef int (*mem_cpy_fp)(void*, void*, uint64_t);
+
 namespace rdma_util {
 
 struct HandshakeData {
@@ -138,7 +140,16 @@ class RcQueuePair {
 
     void bring_up(const HandshakeData& handshake_data) noexcept(false);
 
-    int post_send_send(uint64_t wr_id, uint64_t addr, uint32_t length, uint32_t lkey, bool signaled) noexcept;
+    int post_send_send(uint64_t wr_id, uint64_t laddr, uint32_t length, uint32_t lkey, bool signaled) noexcept;
+
+    int post_send_send_with_imm(
+        uint64_t wr_id,
+        uint64_t laddr,
+        uint32_t length,
+        uint32_t lkey,
+        uint32_t imm,
+        bool signaled
+    ) noexcept;
 
     int post_send_read(
         uint64_t wr_id,
@@ -243,6 +254,15 @@ class MemoryRegion {
     std::shared_ptr<ProtectionDomain> pd_;
     std::shared_ptr<Context> context_;
 
+    // This could be nullptr if the buffer is created with a raw pointer
+    std::shared_ptr<void> inner_buffer_with_deleter_;
+
+    MemoryRegion(
+        std::shared_ptr<ProtectionDomain> pd,
+        std::shared_ptr<void> buffer_with_deleter,
+        uint64_t length
+    ) noexcept(false);
+
     MemoryRegion(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false);
 
   public:
@@ -252,6 +272,29 @@ class MemoryRegion {
 
     ~MemoryRegion();
 
+    /**
+     * @brief Create a MemoryRegion object with a buffer that has a deleter
+     * 
+     * SAFETY: The caller must ensure that the buffer is valid and it has a deleter that handles the buffer's deallocation
+     * 
+     * @param pd ProtectionDomain object
+     * @param buffer_with_deleter buffer with a deleter
+     * @param length length of the buffer
+     */
+    static std::unique_ptr<MemoryRegion>
+    create(std::shared_ptr<ProtectionDomain> pd, std::shared_ptr<void> buffer_with_deleter, uint64_t length) noexcept(
+        false
+    );
+
+    /**
+     * @brief Create a MemoryRegion object with a buffer that has a deleter
+     * 
+     * SAFETY: The caller must ensure that the buffer has longer lifetime than the returned MemoryRegion object
+     * 
+     * @param pd ProtectionDomain object
+     * @param addr address of the raw buffer
+     * @param length length of the buffer
+     */
     static std::unique_ptr<MemoryRegion>
     create(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false);
 
@@ -292,16 +335,26 @@ using Command = std::tuple<Ticket, std::shared_ptr<std::atomic<int>>>;
 template<typename T>
 using MultiMap = std::map<uint32_t, std::queue<T>>;
 
+enum TcclContextAPI {
+    // Using post_send_write_with_imm
+    V1,
+    // Using post_send_send
+    V2,
+};
+
 class TcclContext {
   private:
     Queue<Ticket> send_request_command_queue_;
     Queue<Command> recv_request_command_queue_;
 
+    // Backgound worker threads
     std::thread thread_post_send_;
     std::thread thread_post_recv_;
 
-    uint8_t* host_send_buffer_raw_;
-    uint8_t* host_recv_buffer_raw_;
+    // Only used in V2 API
+    void* device_send_buffer_raw_;
+    void* device_recv_buffer_raw_;
+    mem_cpy_fp mem_cpy_fp_;
 
     std::shared_ptr<std::atomic<bool>> finalized_;
 
@@ -309,9 +362,12 @@ class TcclContext {
     TcclContext(const TcclContext&) = delete;
     TcclContext& operator=(const TcclContext&) = delete;
 
-    TcclContext(std::unique_ptr<RcQueuePair> qp);
+    TcclContext(std::unique_ptr<RcQueuePair> qp, TcclContextAPI api) noexcept(false);
 
-    static void thread_post_send(
+    void initialize_v1(std::unique_ptr<RcQueuePair> qp) noexcept(false);
+    void initialize_v2(std::unique_ptr<RcQueuePair> qp) noexcept(false);
+
+    static void thread_post_send_v1(
         std::shared_ptr<RcQueuePair> qp,
         std::unique_ptr<MemoryRegion> host_send_buffer,
         std::shared_ptr<std::atomic<bool>> finalized,
@@ -320,7 +376,7 @@ class TcclContext {
         Queue<Ticket> remote_recv_request_queue
     ) noexcept(false);
 
-    static void thread_post_recv(
+    static void thread_post_recv_v1(
         std::shared_ptr<RcQueuePair> qp,
         std::unique_ptr<MemoryRegion> host_recv_buffer,
         std::shared_ptr<std::atomic<bool>> finalized,
@@ -330,7 +386,8 @@ class TcclContext {
     ) noexcept(false);
 
   public:
-    static std::shared_ptr<TcclContext> create(std::unique_ptr<RcQueuePair> qp) noexcept(false);
+    static std::shared_ptr<TcclContext>
+    create(std::unique_ptr<RcQueuePair> qp, TcclContextAPI api = TcclContextAPI::V1) noexcept(false);
 
     void send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
     void recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);

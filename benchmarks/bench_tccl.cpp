@@ -10,7 +10,7 @@
 
 #include "gpu_mem_util.h"
 
-constexpr uint64_t kDataBufferSize = 40ull * 1024 * 1024 * 1024;
+constexpr uint64_t kDataBufferSize = 75ull * 1024 * 1024 * 1024;
 
 #else
 
@@ -23,7 +23,7 @@ constexpr const char* kRNIC2 = "mlx5_5";
 constexpr uint32_t kGPU1 = 2;
 constexpr uint32_t kGPU2 = 7;
 
-constexpr uint32_t kChunkSize = 4ull * 1024 * 1024;
+constexpr uint32_t kChunkSize = 16ull * 1024 * 1024;
 
 std::atomic<uint64_t> bytes_transferred;
 
@@ -43,20 +43,16 @@ void reporter_thread() {
     }
 }
 
-void sender_thread_v2(std::unique_ptr<rdma_util::RcQueuePair> qp, uint32_t device) {
-#ifdef USE_CUDA
-    auto data_buffer = gpu_mem_util::malloc_gpu_buffer(kDataBufferSize, device);
-#else
-    auto data_buffer = malloc(kDataBufferSize);
-#endif
-    auto data_mr = rdma_util::MemoryRegion::create(qp->get_pd(), data_buffer, kDataBufferSize);
-    auto context = rdma_util::TcclContext::create(std::move(qp));
-
+void sender_thread(
+    std::shared_ptr<rdma_util::TcclContext> context,
+    std::shared_ptr<rdma_util::MemoryRegion> data_mr,
+    uint32_t stream_id
+) {
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t lkey = data_mr->get_lkey();
 
     for (int i = 0; i < kDataBufferSize / kChunkSize; ++i) {
-        context->send(0, base_addr + i * kChunkSize, kChunkSize, lkey);
+        context->send(stream_id, base_addr + i * kChunkSize, kChunkSize, lkey);
     }
 
     while (bytes_transferred.load() < kDataBufferSize) {
@@ -64,20 +60,16 @@ void sender_thread_v2(std::unique_ptr<rdma_util::RcQueuePair> qp, uint32_t devic
     }
 };
 
-void recver_thread_v2(std::unique_ptr<rdma_util::RcQueuePair> qp, uint32_t device) {
-#ifdef USE_CUDA
-    auto data_buffer = gpu_mem_util::malloc_gpu_buffer(kDataBufferSize, device);
-#else
-    auto data_buffer = malloc(kDataBufferSize);
-#endif
-    auto data_mr = rdma_util::MemoryRegion::create(qp->get_pd(), data_buffer, kDataBufferSize);
-    auto context = rdma_util::TcclContext::create(std::move(qp));
-
+void recver_thread(
+    std::shared_ptr<rdma_util::TcclContext> context,
+    std::shared_ptr<rdma_util::MemoryRegion> data_mr,
+    uint32_t stream_id
+) {
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t rkey = data_mr->get_rkey();
 
     for (int i = 0; i < kDataBufferSize / kChunkSize; ++i) {
-        context->recv(0, base_addr + i * kChunkSize, kChunkSize, rkey);
+        context->recv(stream_id, base_addr + i * kChunkSize, kChunkSize, rkey);
         bytes_transferred.fetch_add(kChunkSize);
     }
 };
@@ -89,9 +81,42 @@ int main() {
     qp1->bring_up(qp2->get_handshake_data());
     qp2->bring_up(qp1->get_handshake_data());
 
+#ifdef USE_CUDA
+    std::shared_ptr<rdma_util::MemoryRegion> data_mr1 = rdma_util::MemoryRegion::create(
+        qp1->get_pd(),
+        std::shared_ptr<void>(
+            gpu_mem_util::malloc_gpu_buffer(kDataBufferSize, kGPU1),
+            [](void* p) { gpu_mem_util::free_gpu_buffer(p, kGPU1); }
+        ),
+        kDataBufferSize
+    );
+    std::shared_ptr<rdma_util::MemoryRegion> data_mr2 = rdma_util::MemoryRegion::create(
+        qp2->get_pd(),
+        std::shared_ptr<void>(
+            gpu_mem_util::malloc_gpu_buffer(kDataBufferSize, kGPU2),
+            [](void* p) { gpu_mem_util::free_gpu_buffer(p, kGPU2); }
+        ),
+        kDataBufferSize
+    );
+#else
+    std::shared_ptr<rdma_util::MemoryRegion> data_mr1 = rdma_util::MemoryRegion::create(
+        qp1->get_pd(),
+        std::shared_ptr<void>(malloc(kDataBufferSize), free),
+        kDataBufferSize
+    );
+    std::shared_ptr<rdma_util::MemoryRegion> data_mr2 = rdma_util::MemoryRegion::create(
+        qp2->get_pd(),
+        std::shared_ptr<void>(malloc(kDataBufferSize), free),
+        kDataBufferSize
+    );
+#endif
+
+    auto context1 = rdma_util::TcclContext::create(std::move(qp1));
+    auto context2 = rdma_util::TcclContext::create(std::move(qp2));
+
     std::thread reporter(reporter_thread);
-    std::thread sender(sender_thread_v2, std::move(qp1), kGPU1);
-    std::thread recver(recver_thread_v2, std::move(qp2), kGPU2);
+    std::thread sender(sender_thread, context1, data_mr1, 0);
+    std::thread recver(recver_thread, context2, data_mr2, 0);
 
     reporter.join();
     sender.join();
