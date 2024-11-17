@@ -41,8 +41,8 @@ int main() {
 
     printf("created data mr\n");
 
-    auto context1 = rdma_util::TcclContext::create(std::move(qp1));
-    auto context2 = rdma_util::TcclContext::create(std::move(qp2));
+    auto context1 = rdma_util::TcclContext::create_v1(std::move(qp1));
+    auto context2 = rdma_util::TcclContext::create_v1(std::move(qp2));
 
     printf("created tccl context\n");
 

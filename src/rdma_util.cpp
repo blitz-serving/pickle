@@ -675,6 +675,7 @@ TcclContext::TcclContext(
 }
 
 void TcclContext::send_v1(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey) {
+    ASSERT(this->api_version_ == TcclContextAPI::V1, "API version mismatch");
     Ticket ticket {};
     ticket.stream_id = stream_id;
     ticket.addr = addr;
@@ -684,6 +685,7 @@ void TcclContext::send_v1(uint32_t stream_id, uint64_t addr, uint32_t length, ui
 }
 
 void TcclContext::recv_v1(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey) {
+    ASSERT(this->api_version_ == TcclContextAPI::V1, "API version mismatch");
     auto flag = std::make_shared<std::atomic<int>>(0);
     Ticket ticket {};
     ticket.stream_id = stream_id;
@@ -698,6 +700,7 @@ void TcclContext::recv_v1(uint32_t stream_id, uint64_t addr, uint32_t length, ui
 }
 
 void TcclContext::send_v2(uint32_t stream_id, uint64_t addr, uint32_t length) {
+    ASSERT(this->api_version_ == TcclContextAPI::V2, "API version mismatch");
     Ticket ticket {};
     ticket.stream_id = stream_id;
     ticket.addr = addr;
@@ -706,6 +709,7 @@ void TcclContext::send_v2(uint32_t stream_id, uint64_t addr, uint32_t length) {
 }
 
 void TcclContext::recv_v2(uint32_t stream_id, uint64_t addr, uint32_t length) {
+    ASSERT(this->api_version_ == TcclContextAPI::V2, "API version mismatch");
     auto flag = std::make_shared<std::atomic<int>>(0);
     Ticket ticket {};
     ticket.stream_id = stream_id;

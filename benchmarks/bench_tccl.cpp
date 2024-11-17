@@ -18,7 +18,7 @@ constexpr uint64_t kDataBufferSize = 40ull * 1024 * 1024 * 1024;
 
 #endif
 
-constexpr const char* kRNIC1 = "mlx5_0";
+constexpr const char* kRNIC1 = "mlx5_1";
 constexpr const char* kRNIC2 = "mlx5_5";
 constexpr uint32_t kGPU1 = 2;
 constexpr uint32_t kGPU2 = 7;
