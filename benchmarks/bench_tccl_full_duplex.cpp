@@ -27,23 +27,25 @@ constexpr uint32_t kChunkSize = 16ull * 1024 * 1024;
 
 std::atomic<uint64_t> bytes_transferred;
 
-void reporter_thread() {
+void reporter_thread(Arc<std::atomic<uint8_t>> finished) {
     uint64_t prev = 0, curr = 0;
     double bandwidth = 0;
 
-    while (1) {
+    while (finished->load(std::memory_order_relaxed) < 2) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
         curr = bytes_transferred.load();
         bandwidth = (curr - prev) / 1024.0 / 1024.0 / 1024.0;
         printf("Bandwidth: %.2f GB/s\n", bandwidth);
         prev = curr;
-        if (curr >= kDataBufferSize) {
-            return;
-        }
     }
 }
 
-void sender_thread(Arc<rdma_util::TcclContext> context, Arc<rdma_util::MemoryRegion> data_mr, uint32_t stream_id) {
+void sender_thread(
+    Arc<rdma_util::TcclContext> context,
+    Arc<rdma_util::MemoryRegion> data_mr,
+    uint32_t stream_id,
+    Arc<std::atomic<uint8_t>> finished
+) {
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t lkey = data_mr->get_lkey();
 
@@ -51,19 +53,27 @@ void sender_thread(Arc<rdma_util::TcclContext> context, Arc<rdma_util::MemoryReg
         context->send(stream_id, base_addr + i * kChunkSize, kChunkSize, lkey).wait();
     }
 
-    while (bytes_transferred.load() < kDataBufferSize) {
+    while (finished->load(std::memory_order_relaxed) < 2) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 };
 
-void recver_thread(Arc<rdma_util::TcclContext> context, Arc<rdma_util::MemoryRegion> data_mr, uint32_t stream_id) {
+void recver_thread(
+    Arc<rdma_util::TcclContext> context,
+    Arc<rdma_util::MemoryRegion> data_mr,
+    uint32_t stream_id,
+    Arc<std::atomic<uint8_t>> finished
+) {
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t rkey = data_mr->get_rkey();
 
     for (int i = 0; i < kDataBufferSize / kChunkSize; ++i) {
-        context->recv(stream_id, base_addr + i * kChunkSize, kChunkSize, rkey).wait();
+        context->recv(stream_id, base_addr + (kDataBufferSize / kChunkSize - i - 1) * kChunkSize, kChunkSize, rkey)
+            .wait();
         bytes_transferred.fetch_add(kChunkSize);
     }
+
+    finished->fetch_add(1);
 };
 
 int main() {
@@ -100,13 +110,20 @@ int main() {
     auto context1 = rdma_util::TcclContext::create(std::move(qp1));
     auto context2 = rdma_util::TcclContext::create(std::move(qp2));
 
-    std::thread reporter(reporter_thread);
-    std::thread sender(sender_thread, context1, data_mr1, 0);
-    std::thread recver(recver_thread, context2, data_mr2, 0);
+    auto finished = std::shared_ptr<std::atomic<uint8_t>>(new std::atomic<uint8_t>(0));
+
+    std::thread reporter(reporter_thread, finished);
+    std::thread sender1(sender_thread, context1, data_mr1, 0, finished);
+    std::thread recver1(recver_thread, context2, data_mr2, 0, finished);
+
+    std::thread sender2(sender_thread, context2, data_mr2, 0, finished);
+    std::thread recver2(recver_thread, context1, data_mr1, 0, finished);
 
     reporter.join();
-    sender.join();
-    recver.join();
+    sender1.join();
+    sender2.join();
+    recver1.join();
+    recver2.join();
 
     printf("received\n");
 
