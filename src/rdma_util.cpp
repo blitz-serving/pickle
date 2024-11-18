@@ -20,8 +20,8 @@
 
 namespace rdma_util {
 
-constexpr uint64_t kSlotNum = 1;
-constexpr uint64_t kHostBufferSize = sizeof(Ticket) * kSlotNum;
+constexpr uint64_t kSendSlotNum = 1;
+constexpr uint64_t kRecvSlotNum = 2 * kSendSlotNum;
 
 #define ASSERT(expr, msg) \
     if (!(expr)) { \
@@ -643,11 +643,11 @@ Arc<TcclContext> TcclContext::create(Box<RcQueuePair> qp) noexcept(false) {
 }
 
 void TcclContext::initialize(Box<RcQueuePair> qp) noexcept(false) {
-    auto host_send_buffer = Arc<void>(new Ticket[kSlotNum], [](Ticket* p) { delete[] p; });
-    auto host_recv_buffer = Arc<void>(new Ticket[kSlotNum], [](Ticket* p) { delete[] p; });
+    auto host_send_buffer = Arc<void>(new Ticket[kSendSlotNum], [](Ticket* p) { delete[] p; });
+    auto host_recv_buffer = Arc<void>(new Ticket[kRecvSlotNum], [](Ticket* p) { delete[] p; });
 
-    auto host_send_buffer_mr = MemoryRegion::create(qp->get_pd(), host_send_buffer, kHostBufferSize);
-    auto host_recv_buffer_mr = MemoryRegion::create(qp->get_pd(), host_recv_buffer, kHostBufferSize);
+    auto host_send_buffer_mr = MemoryRegion::create(qp->get_pd(), host_send_buffer, sizeof(Ticket) * kSendSlotNum);
+    auto host_recv_buffer_mr = MemoryRegion::create(qp->get_pd(), host_recv_buffer, sizeof(Ticket) * kRecvSlotNum);
 
     Arc<std::atomic<bool>> finalized = std::make_shared<std::atomic<bool>>(false);
 
@@ -725,8 +725,8 @@ void TcclContext::thread_post_send(
     Queue<Ticket> local_recv_request_queue,
     Queue<Ticket> remote_recv_request_queue
 ) noexcept(false) {
-    auto buffer_addr = uint64_t(host_send_buffer->get_addr());
     constexpr uint64_t chunksize = uint64_t(sizeof(Ticket));
+    const uint64_t buffer_addr = uint64_t(host_send_buffer->get_addr());
     const uint32_t lkey = host_send_buffer->get_lkey();
 
     std::queue<Ticket> pending_local_recv_request_queue;
@@ -736,8 +736,8 @@ void TcclContext::thread_post_send(
     MultiMap<Arc<std::atomic<bool>>> pending_local_send_flag_map;
 
     std::vector<WorkCompletion> polled_send_wcs;
-    polled_send_wcs.reserve(2 * kSlotNum);
-    ibv_wc* wc_buffer = new ibv_wc[2 * kSlotNum];
+    polled_send_wcs.reserve(2 * kSendSlotNum);
+    ibv_wc* wc_buffer = new ibv_wc[2 * kSendSlotNum];
 
     Ticket tickets[16];
     Command command;
@@ -745,11 +745,10 @@ void TcclContext::thread_post_send(
 
     std::queue<uint64_t> free_post_send_send_slots;
 
-    uint64_t incremented_write_imm_id = kSlotNum;
+    uint64_t post_send_write_slot_available = kSendSlotNum;
+    uint64_t post_send_send_slot_available = kSendSlotNum;
 
-    uint64_t post_send_write_slot_available = kSlotNum;
-    uint64_t post_send_send_slot_available = kSlotNum;
-    for (uint64_t wr_id = 0; wr_id < kSlotNum; ++wr_id) {
+    for (uint64_t wr_id = 0; wr_id < kSendSlotNum; ++wr_id) {
         free_post_send_send_slots.push(wr_id);
     }
 
@@ -776,23 +775,24 @@ void TcclContext::thread_post_send(
 
         // Send local write args to remote side
         while (post_send_send_slot_available > 0 && !pending_local_recv_request_queue.empty()) {
-            post_send_send_slot_available--;
             uint64_t wr_id = free_post_send_send_slots.front();
             Ticket ticket = pending_local_recv_request_queue.front();
             free_post_send_send_slots.pop();
             pending_local_recv_request_queue.pop();
             memcpy(reinterpret_cast<void*>(buffer_addr + wr_id * chunksize), &ticket, sizeof(Ticket));
-            // Tell the remote side (sender) receiver information
             // printf("post_send_send: wr_id %lu stream_id %u\n", wr_id, ticket.stream_id);
-            qp->post_send_send(wr_id, buffer_addr + wr_id * chunksize, chunksize, host_send_buffer->get_lkey(), true);
+            qp->post_send_send(wr_id, buffer_addr + wr_id * chunksize, chunksize, lkey, true);
+            post_send_send_slot_available--;
         }
 
         // Execute remote write args
         for (auto& item : pending_remote_recv_request_map) {
             uint32_t stream_id = item.first;
             std::queue<Ticket>& pending_remote_recv_request_queue = item.second;
-            if (post_send_write_slot_available > 0 && !pending_remote_recv_request_queue.empty()
-                && !pending_local_send_request_map[stream_id].empty()) {
+            if (post_send_write_slot_available == 0) {
+                break;
+            } else if (!pending_remote_recv_request_queue.empty()
+                       && !pending_local_send_request_map[stream_id].empty()) {
                 auto remote_recv_request = pending_remote_recv_request_queue.front();
                 auto local_send_request = pending_local_send_request_map[stream_id].front();
                 pending_remote_recv_request_queue.pop();
@@ -822,7 +822,7 @@ void TcclContext::thread_post_send(
             }
         }
 
-        int ret = qp->poll_send_cq_once(2 * kSlotNum, wc_buffer, polled_send_wcs);
+        int ret = qp->poll_send_cq_once(2 * kSendSlotNum, wc_buffer, polled_send_wcs);
 
         if (ret < 0) {
             throw std::runtime_error("Failed to poll send CQ");
@@ -856,18 +856,18 @@ void TcclContext::thread_post_recv(
     Queue<Ticket> local_recv_request_queue,
     Queue<Ticket> remote_recv_request_queue
 ) noexcept(false) {
-    auto buffer_size = host_recv_buffer->get_length();
-    auto buffer_addr = uint64_t(host_recv_buffer->get_addr());
-    auto chunksize = uint64_t(sizeof(Ticket));
+    constexpr uint64_t chunksize = uint64_t(sizeof(Ticket));
+    const uint64_t buffer_addr = uint64_t(host_recv_buffer->get_addr());
+    const uint32_t lkey = host_recv_buffer->get_lkey();
 
-    for (uint64_t wr_id = 0; wr_id < kSlotNum; ++wr_id) {
-        qp->post_recv(wr_id, buffer_addr + wr_id * chunksize, chunksize, host_recv_buffer->get_lkey());
+    for (uint64_t wr_id = 0; wr_id < kRecvSlotNum; ++wr_id) {
+        qp->post_recv(wr_id, buffer_addr + wr_id * chunksize, chunksize, lkey);
     }
 
     std::vector<WorkCompletion> polled_recv_wcs;
-    polled_recv_wcs.reserve(kSlotNum);
+    polled_recv_wcs.reserve(kRecvSlotNum);
 
-    ibv_wc* wc_buffer = new ibv_wc[2 * kSlotNum];
+    ibv_wc* wc_buffer = new ibv_wc[kRecvSlotNum];
 
     uint64_t count_dequeued = 0;
     Command command;
@@ -882,7 +882,7 @@ void TcclContext::thread_post_recv(
             pending_local_recv_request_map[ticket.stream_id].push(flag);
         }
 
-        int ret = qp->poll_recv_cq_once(2 * kSlotNum, wc_buffer, polled_recv_wcs);
+        int ret = qp->poll_recv_cq_once(kRecvSlotNum, wc_buffer, polled_recv_wcs);
         if (ret > 0) {
             for (const auto& wc : polled_recv_wcs) {
                 if (wc.status != IBV_WC_SUCCESS) {
