@@ -43,7 +43,11 @@ void reporter_thread() {
     }
 }
 
-void sender_thread(Arc<rdma_util::TcclContext> context, Arc<rdma_util::MemoryRegion> data_mr, uint32_t stream_id) {
+void sender_thread(
+    rdma_util::Arc<rdma_util::TcclContext> context,
+    rdma_util::Arc<rdma_util::MemoryRegion> data_mr,
+    uint32_t stream_id
+) {
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t lkey = data_mr->get_lkey();
 
@@ -56,7 +60,11 @@ void sender_thread(Arc<rdma_util::TcclContext> context, Arc<rdma_util::MemoryReg
     }
 };
 
-void recver_thread(Arc<rdma_util::TcclContext> context, Arc<rdma_util::MemoryRegion> data_mr, uint32_t stream_id) {
+void recver_thread(
+    rdma_util::Arc<rdma_util::TcclContext> context,
+    rdma_util::Arc<rdma_util::MemoryRegion> data_mr,
+    uint32_t stream_id
+) {
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t rkey = data_mr->get_rkey();
 
@@ -74,27 +82,33 @@ int main() {
     qp2->bring_up(qp1->get_handshake_data());
 
 #ifdef USE_CUDA
-    Arc<rdma_util::MemoryRegion> data_mr1 = rdma_util::MemoryRegion::create(
+    rdma_util::Arc<rdma_util::MemoryRegion> data_mr1 = rdma_util::MemoryRegion::create(
         qp1->get_pd(),
-        Arc<void>(
+        rdma_util::Arc<void>(
             gpu_mem_util::malloc_gpu_buffer(kDataBufferSize, kGPU1),
             [](void* p) { gpu_mem_util::free_gpu_buffer(p, kGPU1); }
         ),
         kDataBufferSize
     );
-    Arc<rdma_util::MemoryRegion> data_mr2 = rdma_util::MemoryRegion::create(
+    rdma_util::Arc<rdma_util::MemoryRegion> data_mr2 = rdma_util::MemoryRegion::create(
         qp2->get_pd(),
-        Arc<void>(
+        rdma_util::Arc<void>(
             gpu_mem_util::malloc_gpu_buffer(kDataBufferSize, kGPU2),
             [](void* p) { gpu_mem_util::free_gpu_buffer(p, kGPU2); }
         ),
         kDataBufferSize
     );
 #else
-    Arc<rdma_util::MemoryRegion> data_mr1 =
-        rdma_util::MemoryRegion::create(qp1->get_pd(), Arc<void>(malloc(kDataBufferSize), free), kDataBufferSize);
-    Arc<rdma_util::MemoryRegion> data_mr2 =
-        rdma_util::MemoryRegion::create(qp2->get_pd(), Arc<void>(malloc(kDataBufferSize), free), kDataBufferSize);
+    rdma_util::Arc<rdma_util::MemoryRegion> data_mr1 = rdma_util::MemoryRegion::create(
+        qp1->get_pd(),
+        rdma_util::Arc<void>(malloc(kDataBufferSize), free),
+        kDataBufferSize
+    );
+    rdma_util::Arc<rdma_util::MemoryRegion> data_mr2 = rdma_util::MemoryRegion::create(
+        qp2->get_pd(),
+        rdma_util::Arc<void>(malloc(kDataBufferSize), free),
+        kDataBufferSize
+    );
 #endif
 
     auto context1 = rdma_util::TcclContext::create(std::move(qp1));

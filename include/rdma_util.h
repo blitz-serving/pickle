@@ -14,13 +14,13 @@
 
 #include "concurrentqueue.h"
 
+namespace rdma_util {
+
 template<typename T>
 using Arc = std::shared_ptr<T>;
 
 template<typename T>
 using Box = std::unique_ptr<T>;
-
-namespace rdma_util {
 
 struct HandshakeData {
     ibv_gid gid;

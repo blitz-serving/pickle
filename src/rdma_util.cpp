@@ -67,7 +67,7 @@ Box<Context> Context::create(const char* dev_name) noexcept(false) {
     return Box<Context>(new Context(dev_name));
 }
 
-ProtectionDomain::ProtectionDomain(Arc<Context> context) noexcept(false) {
+ProtectionDomain::ProtectionDomain(rdma_util::Arc<Context> context) noexcept(false) {
     this->context_ = context;
     this->inner = ibv_alloc_pd(context->inner);
     if (this->inner == nullptr) {
@@ -75,7 +75,7 @@ ProtectionDomain::ProtectionDomain(Arc<Context> context) noexcept(false) {
     }
 }
 
-Box<ProtectionDomain> ProtectionDomain::create(Arc<Context> context) noexcept(false) {
+Box<ProtectionDomain> ProtectionDomain::create(rdma_util::Arc<Context> context) noexcept(false) {
     return Box<ProtectionDomain>(new ProtectionDomain(context));
 }
 
@@ -85,7 +85,7 @@ ProtectionDomain::~ProtectionDomain() {
     }
 }
 
-RcQueuePair::RcQueuePair(Arc<ProtectionDomain> pd) noexcept(false) {
+RcQueuePair::RcQueuePair(rdma_util::Arc<ProtectionDomain> pd) noexcept(false) {
     this->pd_ = pd;
     this->context_ = pd->context_;
     auto send_cq = ibv_create_cq(context_->inner, 128, nullptr, nullptr, 0);
@@ -124,11 +124,11 @@ Box<RcQueuePair> RcQueuePair::create(const char* dev_name) noexcept(false) {
     return Box<RcQueuePair>(new RcQueuePair(ProtectionDomain::create(Context::create(dev_name))));
 }
 
-Box<RcQueuePair> RcQueuePair::create(Arc<Context> context) noexcept(false) {
+Box<RcQueuePair> RcQueuePair::create(rdma_util::Arc<Context> context) noexcept(false) {
     return Box<RcQueuePair>(new RcQueuePair(ProtectionDomain::create(context)));
 }
 
-Box<RcQueuePair> RcQueuePair::create(Arc<ProtectionDomain> pd) noexcept(false) {
+Box<RcQueuePair> RcQueuePair::create(rdma_util::Arc<ProtectionDomain> pd) noexcept(false) {
     return Box<RcQueuePair>(new RcQueuePair(pd));
 }
 
@@ -589,7 +589,11 @@ int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, ibv_wc* wc_buffer, std
     return ret;
 }
 
-MemoryRegion::MemoryRegion(Arc<ProtectionDomain> pd, Arc<void> buffer_with_deleter, uint64_t length) noexcept(false) {
+MemoryRegion::MemoryRegion(
+    rdma_util::Arc<ProtectionDomain> pd,
+    rdma_util::Arc<void> buffer_with_deleter,
+    uint64_t length
+) noexcept(false) {
     auto addr = buffer_with_deleter.get();
 
     this->inner_buffer_with_deleter_ = buffer_with_deleter;
@@ -607,7 +611,7 @@ MemoryRegion::MemoryRegion(Arc<ProtectionDomain> pd, Arc<void> buffer_with_delet
     }
 }
 
-MemoryRegion::MemoryRegion(Arc<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false) {
+MemoryRegion::MemoryRegion(rdma_util::Arc<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false) {
     this->inner_buffer_with_deleter_ = nullptr;
     this->pd_ = pd;
     this->context_ = pd->context_;
@@ -629,27 +633,31 @@ MemoryRegion::~MemoryRegion() {
     }
 }
 
-Box<MemoryRegion>
-MemoryRegion::create(Arc<ProtectionDomain> pd, Arc<void> buffer_with_deleter, uint64_t length) noexcept(false) {
+Box<MemoryRegion> MemoryRegion::create(
+    rdma_util::Arc<ProtectionDomain> pd,
+    rdma_util::Arc<void> buffer_with_deleter,
+    uint64_t length
+) noexcept(false) {
     return Box<MemoryRegion>(new MemoryRegion(pd, buffer_with_deleter, length));
 }
 
-Box<MemoryRegion> MemoryRegion::create(Arc<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false) {
+Box<MemoryRegion> MemoryRegion::create(rdma_util::Arc<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false
+) {
     return Box<MemoryRegion>(new MemoryRegion(pd, addr, length));
 }
 
-Arc<TcclContext> TcclContext::create(Box<RcQueuePair> qp) noexcept(false) {
-    return Arc<TcclContext>(new TcclContext(std::move(qp)));
+rdma_util::Arc<TcclContext> TcclContext::create(Box<RcQueuePair> qp) noexcept(false) {
+    return rdma_util::Arc<TcclContext>(new TcclContext(std::move(qp)));
 }
 
 void TcclContext::initialize(Box<RcQueuePair> qp) noexcept(false) {
-    auto host_send_buffer = Arc<void>(new Ticket[kSendSlotNum], [](Ticket* p) { delete[] p; });
-    auto host_recv_buffer = Arc<void>(new Ticket[kRecvSlotNum], [](Ticket* p) { delete[] p; });
+    auto host_send_buffer = rdma_util::Arc<void>(new Ticket[kSendSlotNum], [](Ticket* p) { delete[] p; });
+    auto host_recv_buffer = rdma_util::Arc<void>(new Ticket[kRecvSlotNum], [](Ticket* p) { delete[] p; });
 
     auto host_send_buffer_mr = MemoryRegion::create(qp->get_pd(), host_send_buffer, sizeof(Ticket) * kSendSlotNum);
     auto host_recv_buffer_mr = MemoryRegion::create(qp->get_pd(), host_recv_buffer, sizeof(Ticket) * kRecvSlotNum);
 
-    Arc<std::atomic<bool>> finalized = std::make_shared<std::atomic<bool>>(false);
+    rdma_util::Arc<std::atomic<bool>> finalized = std::make_shared<std::atomic<bool>>(false);
 
     auto local_recv_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
     auto remote_recv_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
@@ -657,7 +665,7 @@ void TcclContext::initialize(Box<RcQueuePair> qp) noexcept(false) {
     auto recv_command_queue = Queue<Command>(new moodycamel::ConcurrentQueue<Command>());
     auto send_command_queue = Queue<Command>(new moodycamel::ConcurrentQueue<Command>());
 
-    Arc<RcQueuePair> shared_qp = std::move(qp);
+    rdma_util::Arc<RcQueuePair> shared_qp = std::move(qp);
 
     std::thread t1(
         thread_post_send,
@@ -718,9 +726,9 @@ Handle TcclContext::recv(uint32_t stream_id, uint64_t addr, uint32_t length, uin
 // local_recv_request_queue is received from Recv Request like NcclRecv
 // remote_recv_request_queue is received from remote side sender.
 void TcclContext::thread_post_send(
-    Arc<RcQueuePair> qp,
+    rdma_util::Arc<RcQueuePair> qp,
     Box<MemoryRegion> host_send_buffer,
-    Arc<std::atomic<bool>> finalized,
+    rdma_util::Arc<std::atomic<bool>> finalized,
     Queue<Command> send_command_queue,
     Queue<Ticket> local_recv_request_queue,
     Queue<Ticket> remote_recv_request_queue
@@ -733,7 +741,7 @@ void TcclContext::thread_post_send(
     MultiMap<Ticket> pending_remote_recv_request_map;
 
     MultiMap<Ticket> pending_local_send_request_map;
-    MultiMap<Arc<std::atomic<bool>>> pending_local_send_flag_map;
+    MultiMap<rdma_util::Arc<std::atomic<bool>>> pending_local_send_flag_map;
 
     std::vector<WorkCompletion> polled_send_wcs;
     polled_send_wcs.reserve(2 * kSendSlotNum);
@@ -849,9 +857,9 @@ void TcclContext::thread_post_send(
 }
 
 void TcclContext::thread_post_recv(
-    Arc<RcQueuePair> qp,
+    rdma_util::Arc<RcQueuePair> qp,
     Box<MemoryRegion> host_recv_buffer,
-    Arc<std::atomic<bool>> finalized,
+    rdma_util::Arc<std::atomic<bool>> finalized,
     Queue<Command> recv_command_queue,
     Queue<Ticket> local_recv_request_queue,
     Queue<Ticket> remote_recv_request_queue
@@ -872,7 +880,7 @@ void TcclContext::thread_post_recv(
     uint64_t count_dequeued = 0;
     Command command;
 
-    MultiMap<Arc<std::atomic<bool>>> pending_local_recv_request_map;
+    MultiMap<rdma_util::Arc<std::atomic<bool>>> pending_local_recv_request_map;
 
     while (!finalized->load(std::memory_order_relaxed)) {
         while (recv_command_queue->try_dequeue(command)) {
@@ -891,7 +899,8 @@ void TcclContext::thread_post_recv(
                     auto wr_id = wc.wr_id;
                     if (wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
                         // printf("Polled IBV_WC_RECV_RDMA_WITH_IMM wc: %s\n", wc.to_string().c_str());
-                        std::queue<Arc<std::atomic<bool>>>& queue = pending_local_recv_request_map[wc.imm_data];
+                        std::queue<rdma_util::Arc<std::atomic<bool>>>& queue =
+                            pending_local_recv_request_map[wc.imm_data];
                         queue.front()->store(1);
                         queue.pop();
                     } else {
