@@ -659,10 +659,11 @@ void TcclContext::initialize(std::unique_ptr<RcQueuePair> qp) noexcept(false) {
 
     std::shared_ptr<std::atomic<bool>> finalized = std::make_shared<std::atomic<bool>>(false);
 
-    auto local_send_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
     auto local_recv_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
     auto remote_recv_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
+
     auto recv_command_queue = Queue<Command>(new moodycamel::ConcurrentQueue<Command>());
+    auto send_command_queue = Queue<Command>(new moodycamel::ConcurrentQueue<Command>());
 
     std::shared_ptr<RcQueuePair> shared_qp = std::move(qp);
 
@@ -671,7 +672,7 @@ void TcclContext::initialize(std::unique_ptr<RcQueuePair> qp) noexcept(false) {
         shared_qp,
         std::move(host_send_buffer_mr),
         finalized,
-        local_send_request_queue,
+        send_command_queue,
         local_recv_request_queue,
         remote_recv_request_queue
     );
@@ -689,28 +690,28 @@ void TcclContext::initialize(std::unique_ptr<RcQueuePair> qp) noexcept(false) {
     this->thread_post_send_ = std::move(t1);
     this->thread_post_recv_ = std::move(t2);
     this->recv_request_command_queue_ = std::move(recv_command_queue);
-    this->send_request_command_queue_ = std::move(local_send_request_queue);
+    this->send_request_command_queue_ = std::move(send_command_queue);
     this->finalized_ = finalized;
-    this->api_version_ = TcclContextAPI::Default;
 }
 
 TcclContext::TcclContext(std::unique_ptr<RcQueuePair> qp) noexcept(false) {
     this->initialize(std::move(qp));
 }
 
-void TcclContext::send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey) {
-    ASSERT(this->api_version_ == TcclContextAPI::Default, "API version mismatch");
+Handle TcclContext::send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey) {
+    auto flag = std::make_shared<std::atomic<bool>>(false);
     Ticket ticket {};
     ticket.stream_id = stream_id;
     ticket.addr = addr;
     ticket.length = length;
     ticket.key = lkey;
-    this->send_request_command_queue_->enqueue(ticket);
+    Command command = std::make_tuple(ticket, flag);
+    this->send_request_command_queue_->enqueue(command);
+    return Handle(flag);
 }
 
-void TcclContext::recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey) {
-    ASSERT(this->api_version_ == TcclContextAPI::Default, "API version mismatch");
-    auto flag = std::make_shared<std::atomic<int>>(0);
+Handle TcclContext::recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey) {
+    auto flag = std::make_shared<std::atomic<bool>>(false);
     Ticket ticket {};
     ticket.stream_id = stream_id;
     ticket.addr = addr;
@@ -718,9 +719,7 @@ void TcclContext::recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint3
     ticket.key = rkey;
     Command command = std::make_tuple(ticket, flag);
     this->recv_request_command_queue_->enqueue(command);
-    while (flag->load() == 0) {
-        std::this_thread::yield();
-    }
+    return Handle(flag);
 }
 
 // local_send_request_queue is received from Send Request like NcclSend
@@ -730,7 +729,7 @@ void TcclContext::thread_post_send(
     std::shared_ptr<RcQueuePair> qp,
     std::unique_ptr<MemoryRegion> host_send_buffer,
     std::shared_ptr<std::atomic<bool>> finalized,
-    Queue<Ticket> local_send_request_queue,
+    Queue<Command> send_command_queue,
     Queue<Ticket> local_recv_request_queue,
     Queue<Ticket> remote_recv_request_queue
 ) noexcept(false) {
@@ -739,14 +738,17 @@ void TcclContext::thread_post_send(
     const uint32_t lkey = host_send_buffer->get_lkey();
 
     std::queue<Ticket> pending_local_recv_request_queue;
-    MultiMap<Ticket> pending_local_send_request_map;
     MultiMap<Ticket> pending_remote_recv_request_map;
+
+    MultiMap<Ticket> pending_local_send_request_map;
+    MultiMap<std::shared_ptr<std::atomic<bool>>> pending_local_send_flag_map;
 
     std::vector<WorkCompletion> polled_send_wcs;
     polled_send_wcs.reserve(2 * kSlotNum);
     ibv_wc* wc_buffer = new ibv_wc[2 * kSlotNum];
 
     Ticket tickets[16];
+    Command command;
     uint64_t count_dequeued = 0;
 
     std::queue<uint64_t> free_post_send_send_slots;
@@ -761,9 +763,11 @@ void TcclContext::thread_post_send(
 
     while (!finalized->load(std::memory_order_relaxed)) {
         // Received from send request
-        count_dequeued = local_send_request_queue->try_dequeue_bulk(tickets, 16);
-        for (uint64_t i = 0; i < count_dequeued; ++i) {
-            pending_local_send_request_map[tickets[i].stream_id].push(tickets[i]);
+        while (send_command_queue->try_dequeue(command)) {
+            auto ticket = std::get<0>(command);
+            auto flag = std::get<1>(command);
+            pending_local_send_request_map[ticket.stream_id].push(ticket);
+            pending_local_send_flag_map[ticket.stream_id].push(flag);
         }
 
         // Received from recv request
@@ -787,7 +791,6 @@ void TcclContext::thread_post_send(
             pending_local_recv_request_queue.pop();
             memcpy(reinterpret_cast<void*>(buffer_addr + wr_id * chunksize), &ticket, sizeof(Ticket));
             // Tell the remote side (sender) receiver information
-
             // printf("post_send_send: wr_id %lu stream_id %u\n", wr_id, ticket.stream_id);
             qp->post_send_send(wr_id, buffer_addr + wr_id * chunksize, chunksize, host_send_buffer->get_lkey(), true);
         }
@@ -807,14 +810,11 @@ void TcclContext::thread_post_send(
                     throw std::runtime_error("Length mismatch");
                 }
 
-                auto wr_id = incremented_write_imm_id;
+                auto wr_id = stream_id;
                 auto raddr = remote_recv_request.addr;
                 auto rkey = remote_recv_request.key;
                 auto laddr = local_send_request.addr;
                 auto lkey = local_send_request.key;
-                incremented_write_imm_id++;
-
-                // printf("post_send_write: %lu %u %lu %lu %u %u\n", wr_id, stream_id, raddr, laddr, rkey, lkey);
 
                 qp->post_send_write_with_imm(
                     wr_id,
@@ -845,6 +845,8 @@ void TcclContext::thread_post_send(
                     post_send_send_slot_available++;
                 } else if (wc.opcode == IBV_WC_RDMA_WRITE) {
                     // printf("Polled IBV_WC_RDMA_WRITE wc: %s\n", wc.to_string().c_str());
+                    pending_local_send_flag_map[wc.wr_id].front()->store(true);
+                    pending_local_send_flag_map[wc.wr_id].pop();
                     post_send_write_slot_available++;
                 }
             }
@@ -878,7 +880,7 @@ void TcclContext::thread_post_recv(
     uint64_t count_dequeued = 0;
     Command command;
 
-    MultiMap<std::shared_ptr<std::atomic<int>>> pending_local_recv_request_map;
+    MultiMap<std::shared_ptr<std::atomic<bool>>> pending_local_recv_request_map;
 
     while (!finalized->load(std::memory_order_relaxed)) {
         while (recv_command_queue->try_dequeue(command)) {
@@ -897,7 +899,7 @@ void TcclContext::thread_post_recv(
                     auto wr_id = wc.wr_id;
                     if (wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
                         // printf("Polled IBV_WC_RECV_RDMA_WITH_IMM wc: %s\n", wc.to_string().c_str());
-                        std::queue<std::shared_ptr<std::atomic<int>>>& queue =
+                        std::queue<std::shared_ptr<std::atomic<bool>>>& queue =
                             pending_local_recv_request_map[wc.imm_data];
                         queue.front()->store(1);
                         queue.pop();
@@ -913,189 +915,6 @@ void TcclContext::thread_post_recv(
             }
         } else if (ret < 0) {
             throw std::runtime_error("Failed to poll recv CQ");
-        }
-    }
-
-    delete[] wc_buffer;
-}
-
-TcclContext::TcclContext(
-    std::unique_ptr<RcQueuePair> qp,
-    std::shared_ptr<MemoryRegion> device_send_buffer,
-    std::shared_ptr<MemoryRegion> device_recv_buffer,
-    mem_cpy_fp mem_cpy_func
-) noexcept(false) {
-    this->initialize_v2(std::move(qp), device_send_buffer, device_recv_buffer, mem_cpy_func);
-}
-
-std::shared_ptr<TcclContext> TcclContext::create_v2(
-    std::unique_ptr<RcQueuePair> qp,
-    std::shared_ptr<MemoryRegion> device_send_buffer,
-    std::shared_ptr<MemoryRegion> device_recv_buffer,
-    mem_cpy_fp mem_cpy_func
-) noexcept(false) {
-    return std::shared_ptr<TcclContext>(
-        new TcclContext(std::move(qp), device_send_buffer, device_recv_buffer, mem_cpy_func)
-    );
-}
-
-void TcclContext::initialize_v2(
-    std::unique_ptr<RcQueuePair> qp,
-    std::shared_ptr<MemoryRegion> device_send_buffer,
-    std::shared_ptr<MemoryRegion> device_recv_buffer,
-    mem_cpy_fp mem_cpy_func
-) noexcept(false) {
-    std::shared_ptr<std::atomic<bool>> finalized = std::make_shared<std::atomic<bool>>(false);
-
-    auto local_send_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
-    auto recv_command_queue = Queue<Command>(new moodycamel::ConcurrentQueue<Command>());
-
-    std::shared_ptr<RcQueuePair> shared_qp = std::move(qp);
-
-    auto t1 = std::thread(
-        thread_post_send_v2,
-        shared_qp,
-        device_send_buffer,
-        finalized,
-        mem_cpy_func,
-        local_send_request_queue
-    );
-
-    auto t2 =
-        std::thread(thread_post_recv_v2, shared_qp, device_recv_buffer, finalized, mem_cpy_func, recv_command_queue);
-
-    this->thread_post_send_ = std::move(t1);
-    this->thread_post_recv_ = std::move(t2);
-    this->recv_request_command_queue_ = std::move(recv_command_queue);
-    this->send_request_command_queue_ = std::move(local_send_request_queue);
-    this->finalized_ = finalized;
-    this->api_version_ = TcclContextAPI::V2;
-}
-
-void TcclContext::send_v2(uint32_t stream_id, uint64_t addr, uint32_t length) {
-    ASSERT(this->api_version_ == TcclContextAPI::V2, "API version mismatch");
-    Ticket ticket {};
-    ticket.stream_id = stream_id;
-    ticket.addr = addr;
-    ticket.length = length;
-    this->send_request_command_queue_->enqueue(ticket);
-}
-
-void TcclContext::recv_v2(uint32_t stream_id, uint64_t addr, uint32_t length) {
-    ASSERT(this->api_version_ == TcclContextAPI::V2, "API version mismatch");
-    auto flag = std::make_shared<std::atomic<int>>(0);
-    Ticket ticket {};
-    ticket.stream_id = stream_id;
-    ticket.addr = addr;
-    ticket.length = length;
-    Command command = std::make_tuple(ticket, flag);
-    this->recv_request_command_queue_->enqueue(command);
-    while (flag->load() == 0) {
-        std::this_thread::yield();
-    }
-}
-
-void TcclContext::thread_post_send_v2(
-    std::shared_ptr<RcQueuePair> qp,
-    std::shared_ptr<MemoryRegion> device_send_buffer,
-    std::shared_ptr<std::atomic<bool>> finalized,
-    mem_cpy_fp mem_cpy_func,
-    Queue<Ticket> local_send_request_queue
-) noexcept(false) {
-    const uint64_t buffer_addr = uint64_t(device_send_buffer->get_addr());
-    const uint64_t buffer_size = device_send_buffer->get_length();
-    const uint32_t lkey = device_send_buffer->get_lkey();
-
-    std::vector<WorkCompletion> polled_send_wcs;
-    polled_send_wcs.reserve(1);
-    ibv_wc* wc_buffer = new ibv_wc[1];
-    uint64_t slots_available = 1;
-
-    uint64_t count_dequeued = 0;
-    Ticket ticket;
-
-    MultiMap<Ticket> pending_local_send_request_map;
-
-    while (!finalized->load(std::memory_order_relaxed)) {
-        while (local_send_request_queue->try_dequeue(ticket)) {
-            pending_local_send_request_map[ticket.stream_id].push(ticket);
-        }
-
-        if (slots_available > 0) {
-            for (auto& item : pending_local_send_request_map) {
-                uint32_t stream_id = item.first;
-                std::queue<Ticket>& queue = item.second;
-                if (!queue.empty()) {
-                    Ticket ticket = queue.front();
-                    queue.pop();
-                    mem_cpy_func(
-                        reinterpret_cast<void*>(buffer_addr),
-                        reinterpret_cast<void*>(ticket.addr),
-                        ticket.length
-                    );
-                    qp->post_send_send_with_imm(0, buffer_addr, ticket.length, lkey, stream_id, true);
-                    slots_available--;
-                }
-            }
-        }
-
-        int ret = qp->poll_send_cq_once(1, wc_buffer, polled_send_wcs);
-        ASSERT(ret >= 0, "Failed to poll send CQ");
-        for (const auto& wc : polled_send_wcs) {
-            ASSERT(
-                wc.status == IBV_WC_SUCCESS,
-                (std::string("Failed to send data. Status code ") + std::to_string(wc.status)).c_str()
-            );
-            slots_available++;
-        }
-    }
-
-    delete[] wc_buffer;
-}
-
-void TcclContext::thread_post_recv_v2(
-    std::shared_ptr<RcQueuePair> qp,
-    std::shared_ptr<MemoryRegion> device_recv_buffer,
-    std::shared_ptr<std::atomic<bool>> finalized,
-    mem_cpy_fp mem_cpy_func,
-    Queue<Command> recv_command_queue
-) noexcept(false) {
-    const uint64_t buffer_addr = uint64_t(device_recv_buffer->get_addr());
-    const uint64_t buffer_size = device_recv_buffer->get_length();
-
-    std::vector<WorkCompletion> polled_recv_wcs;
-    polled_recv_wcs.reserve(1);
-    ibv_wc* wc_buffer = new ibv_wc[1];
-    uint64_t slots_available = 1;
-
-    uint64_t count_dequeued = 0;
-    Command command;
-
-    MultiMap<Command> pending_local_recv_request_map;
-
-    while (!finalized->load(std::memory_order_relaxed)) {
-        while (recv_command_queue->try_dequeue(command)) {
-            pending_local_recv_request_map[std::get<0>(command).stream_id].push(command);
-        }
-
-        if (slots_available > 0) {
-            qp->post_recv(0, buffer_addr, buffer_size, device_recv_buffer->get_lkey());
-            slots_available--;
-        }
-
-        int ret = qp->poll_recv_cq_once(1, wc_buffer, polled_recv_wcs);
-        ASSERT(ret >= 0, "Failed to poll recv CQ");
-        for (const auto& wc : polled_recv_wcs) {
-            ASSERT(wc.status == IBV_WC_SUCCESS && wc.opcode == IBV_WC_RECV, "Failed to receive data");
-            std::queue<Command>& queue = pending_local_recv_request_map[wc.imm_data];
-            ASSERT(!queue.empty(), "Queue is empty");
-            Command command = queue.front();
-            auto ticket = std::get<0>(command);
-            ASSERT(ticket.length == wc.byte_len, "ticket.length and wc.byte_len mismatch");
-            mem_cpy_func(reinterpret_cast<void*>(ticket.addr), reinterpret_cast<void*>(buffer_addr), ticket.length);
-            std::get<1>(command)->store(1);
-            slots_available++;
-            queue.pop();
         }
     }
 

@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <thread>
 #include <utility>
+#include <vector>
 
 #ifdef USE_CUDA
 
@@ -46,17 +48,30 @@ int main() {
 
     printf("created tccl context\n");
 
-    context1->send(0, uint64_t(data_mr_1->get_addr()), 64 * 1024 * 1024, data_mr_1->get_lkey());
-    context1->send(0, uint64_t(data_mr_1->get_addr()), 64 * 1024 * 1024, data_mr_1->get_lkey());
-    context1->send(3, uint64_t(data_mr_1->get_addr()), 64 * 1024 * 1024, data_mr_1->get_lkey());
-    context1->send(2, uint64_t(data_mr_1->get_addr()), 64 * 1024 * 1024, data_mr_1->get_lkey());
+    std::vector<rdma_util::Handle> handles;
 
-    context2->recv(0, uint64_t(data_mr_2->get_addr()), 64 * 1024 * 1024, data_mr_2->get_rkey());
-    context2->recv(2, uint64_t(data_mr_2->get_addr()), 64 * 1024 * 1024, data_mr_2->get_rkey());
-    context2->recv(3, uint64_t(data_mr_2->get_addr()), 64 * 1024 * 1024, data_mr_2->get_rkey());
-    context2->recv(0, uint64_t(data_mr_2->get_addr()), 64 * 1024 * 1024, data_mr_2->get_rkey());
+    handles.push_back(context1->send(0, uint64_t(data_mr_1->get_addr()), 64 * 1024 * 1024, data_mr_1->get_lkey()));
+    handles.push_back(context1->send(0, uint64_t(data_mr_1->get_addr()), 64 * 1024 * 1024, data_mr_1->get_lkey()));
+    handles.push_back(context1->send(3, uint64_t(data_mr_1->get_addr()), 64 * 1024 * 1024, data_mr_1->get_lkey()));
+    handles.push_back(context1->send(2, uint64_t(data_mr_1->get_addr()), 64 * 1024 * 1024, data_mr_1->get_lkey()));
+
+    std::thread wait_handles([&handles]() {
+        printf("waiting for handles\n");
+        for (auto& handle : handles) {
+            handle.wait();
+        }
+        printf("all handles are done\n");
+    });
+
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+    context2->recv(0, uint64_t(data_mr_2->get_addr()), 64 * 1024 * 1024, data_mr_2->get_rkey()).wait();
+    context2->recv(2, uint64_t(data_mr_2->get_addr()), 64 * 1024 * 1024, data_mr_2->get_rkey()).wait();
+    context2->recv(3, uint64_t(data_mr_2->get_addr()), 64 * 1024 * 1024, data_mr_2->get_rkey()).wait();
+    context2->recv(0, uint64_t(data_mr_2->get_addr()), 64 * 1024 * 1024, data_mr_2->get_rkey()).wait();
 
     printf("received\n");
+
+    wait_handles.join();
 
 #ifdef USE_CUDA
     gpu_mem_util::free_gpu_buffer(data_buffer1, kGPU1);

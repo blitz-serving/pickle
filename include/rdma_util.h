@@ -330,21 +330,40 @@ struct Ticket {
     }
 };
 
-using Command = std::tuple<Ticket, std::shared_ptr<std::atomic<int>>>;
+using Command = std::tuple<Ticket, std::shared_ptr<std::atomic<bool>>>;
 
 template<typename T>
 using MultiMap = std::map<uint32_t, std::queue<T>>;
 
-enum TcclContextAPI {
-    // Using post_send_write_with_imm
-    Default,
-    // Using post_send_send
-    V2,
+class Handle {
+  private:
+    std::shared_ptr<std::atomic<bool>> finished_;
+
+  public:
+    Handle() = delete;
+
+    Handle(const std::shared_ptr<std::atomic<bool>>& finished) : finished_(finished) {}
+
+    /**
+     * @brief Check if the send/recv is finished.
+     */
+    inline bool is_finished() {
+        return this->finished_->load(std::memory_order_relaxed);
+    }
+
+    /**
+     * @brief Wait until the operation is finished in a busy looping way.
+     */
+    inline void wait() {
+        while (!this->is_finished()) {
+            std::this_thread::yield();
+        }
+    }
 };
 
 class TcclContext {
   private:
-    Queue<Ticket> send_request_command_queue_;
+    Queue<Command> send_request_command_queue_;
     Queue<Command> recv_request_command_queue_;
 
     // Backgound worker threads
@@ -352,9 +371,6 @@ class TcclContext {
     std::thread thread_post_recv_;
 
     std::shared_ptr<std::atomic<bool>> finalized_;
-
-    // API
-    TcclContextAPI api_version_;
 
     TcclContext() = delete;
     TcclContext(const TcclContext&) = delete;
@@ -365,8 +381,8 @@ class TcclContext {
 
   public:
     static std::shared_ptr<TcclContext> create(std::unique_ptr<RcQueuePair> qp) noexcept(false);
-    void send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
-    void recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);
+    [[nodiscard]] Handle send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
+    [[nodiscard]] Handle recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);
 
   private:
     TcclContext(std::unique_ptr<RcQueuePair> qp) noexcept(false);
@@ -377,7 +393,7 @@ class TcclContext {
         std::shared_ptr<RcQueuePair> qp,
         std::unique_ptr<MemoryRegion> host_send_buffer,
         std::shared_ptr<std::atomic<bool>> finalized,
-        Queue<Ticket> local_send_request_queue,
+        Queue<Command> send_command_queue,
         Queue<Ticket> local_recv_request_queue,
         Queue<Ticket> remote_recv_request_queue
     ) noexcept(false);
@@ -389,56 +405,6 @@ class TcclContext {
         Queue<Command> recv_command_queue,
         Queue<Ticket> local_recv_request_queue,
         Queue<Ticket> remote_recv_request_queue
-    ) noexcept(false);
-
-  public:
-    [[deprecated]]
-    static std::shared_ptr<TcclContext> create_v2(
-        std::unique_ptr<RcQueuePair> qp,
-        std::shared_ptr<MemoryRegion> device_send_buffer,
-        std::shared_ptr<MemoryRegion> device_recv_buffer,
-        mem_cpy_fp mem_cpy_func
-    ) noexcept(false);
-
-    [[deprecated]]
-    void send_v2(uint32_t stream_id, uint64_t addr, uint32_t length);
-
-    [[deprecated]]
-    void recv_v2(uint32_t stream_id, uint64_t addr, uint32_t length);
-
-  private:
-    [[deprecated]]
-    TcclContext(
-        std::unique_ptr<RcQueuePair> qp,
-        std::shared_ptr<MemoryRegion> device_send_buffer,
-        std::shared_ptr<MemoryRegion> device_recv_buffer,
-        mem_cpy_fp mem_cpy_func
-    ) noexcept(false);
-
-    [[deprecated]]
-    void initialize_v2(
-        std::unique_ptr<RcQueuePair> qp,
-        std::shared_ptr<MemoryRegion> device_send_buffer,
-        std::shared_ptr<MemoryRegion> device_recv_buffer,
-        mem_cpy_fp mem_cpy_func
-    ) noexcept(false);
-
-    [[deprecated]]
-    static void thread_post_send_v2(
-        std::shared_ptr<RcQueuePair> qp,
-        std::shared_ptr<MemoryRegion> device_send_buffer,
-        std::shared_ptr<std::atomic<bool>> finalized,
-        mem_cpy_fp mem_cpy_func,
-        Queue<Ticket> local_send_request_queue
-    ) noexcept(false);
-
-    [[deprecated]]
-    static void thread_post_recv_v2(
-        std::shared_ptr<RcQueuePair> qp,
-        std::shared_ptr<MemoryRegion> device_recv_buffer,
-        std::shared_ptr<std::atomic<bool>> finalized,
-        mem_cpy_fp mem_cpy_func,
-        Queue<Command> recv_command_queue
     ) noexcept(false);
 };
 

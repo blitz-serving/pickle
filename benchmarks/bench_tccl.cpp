@@ -23,7 +23,7 @@ constexpr const char* kRNIC2 = "mlx5_5";
 constexpr uint32_t kGPU1 = 2;
 constexpr uint32_t kGPU2 = 7;
 
-constexpr uint32_t kChunkSize = 16ull * 1024 * 1024;
+constexpr uint32_t kChunkSize = 4ull * 1024 * 1024;
 
 std::atomic<uint64_t> bytes_transferred;
 
@@ -52,7 +52,7 @@ void sender_thread(
     const uint32_t lkey = data_mr->get_lkey();
 
     for (int i = 0; i < kDataBufferSize / kChunkSize; ++i) {
-        context->send(stream_id, base_addr + i * kChunkSize, kChunkSize, lkey);
+        context->send(stream_id, base_addr + i * kChunkSize, kChunkSize, lkey).wait();
     }
 
     while (bytes_transferred.load() < kDataBufferSize) {
@@ -69,7 +69,7 @@ void recver_thread(
     const uint32_t rkey = data_mr->get_rkey();
 
     for (int i = 0; i < kDataBufferSize / kChunkSize; ++i) {
-        context->recv(stream_id, base_addr + i * kChunkSize, kChunkSize, rkey);
+        context->recv(stream_id, base_addr + i * kChunkSize, kChunkSize, rkey).wait();
         bytes_transferred.fetch_add(kChunkSize);
     }
 };
