@@ -646,36 +646,60 @@ MemoryRegion::create(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t 
     return std::unique_ptr<MemoryRegion>(new MemoryRegion(pd, addr, length));
 }
 
-std::shared_ptr<TcclContext> TcclContext::create_v1(std::unique_ptr<RcQueuePair> qp) noexcept(false) {
+std::shared_ptr<TcclContext> TcclContext::create(std::unique_ptr<RcQueuePair> qp) noexcept(false) {
     return std::shared_ptr<TcclContext>(new TcclContext(std::move(qp)));
 }
 
-std::shared_ptr<TcclContext> TcclContext::create_v2(
-    std::unique_ptr<RcQueuePair> qp,
-    std::shared_ptr<MemoryRegion> device_send_buffer,
-    std::shared_ptr<MemoryRegion> device_recv_buffer,
-    mem_cpy_fp mem_cpy_func
-) noexcept(false) {
-    return std::shared_ptr<TcclContext>(
-        new TcclContext(std::move(qp), device_send_buffer, device_recv_buffer, mem_cpy_func)
+void TcclContext::initialize(std::unique_ptr<RcQueuePair> qp) noexcept(false) {
+    auto host_send_buffer = std::shared_ptr<void>(new Ticket[kSlotNum], [](Ticket* p) { delete[] p; });
+    auto host_recv_buffer = std::shared_ptr<void>(new Ticket[kSlotNum], [](Ticket* p) { delete[] p; });
+
+    auto host_send_buffer_mr = MemoryRegion::create(qp->get_pd(), host_send_buffer, kHostBufferSize);
+    auto host_recv_buffer_mr = MemoryRegion::create(qp->get_pd(), host_recv_buffer, kHostBufferSize);
+
+    std::shared_ptr<std::atomic<bool>> finalized = std::make_shared<std::atomic<bool>>(false);
+
+    auto local_send_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
+    auto local_recv_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
+    auto remote_recv_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
+    auto recv_command_queue = Queue<Command>(new moodycamel::ConcurrentQueue<Command>());
+
+    std::shared_ptr<RcQueuePair> shared_qp = std::move(qp);
+
+    std::thread t1(
+        thread_post_send,
+        shared_qp,
+        std::move(host_send_buffer_mr),
+        finalized,
+        local_send_request_queue,
+        local_recv_request_queue,
+        remote_recv_request_queue
     );
+
+    std::thread t2(
+        thread_post_recv,
+        shared_qp,
+        std::move(host_recv_buffer_mr),
+        finalized,
+        recv_command_queue,
+        local_recv_request_queue,
+        remote_recv_request_queue
+    );
+
+    this->thread_post_send_ = std::move(t1);
+    this->thread_post_recv_ = std::move(t2);
+    this->recv_request_command_queue_ = std::move(recv_command_queue);
+    this->send_request_command_queue_ = std::move(local_send_request_queue);
+    this->finalized_ = finalized;
+    this->api_version_ = TcclContextAPI::Default;
 }
 
 TcclContext::TcclContext(std::unique_ptr<RcQueuePair> qp) noexcept(false) {
-    this->initialize_v1(std::move(qp));
+    this->initialize(std::move(qp));
 }
 
-TcclContext::TcclContext(
-    std::unique_ptr<RcQueuePair> qp,
-    std::shared_ptr<MemoryRegion> device_send_buffer,
-    std::shared_ptr<MemoryRegion> device_recv_buffer,
-    mem_cpy_fp mem_cpy_func
-) noexcept(false) {
-    this->initialize_v2(std::move(qp), device_send_buffer, device_recv_buffer, mem_cpy_func);
-}
-
-void TcclContext::send_v1(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey) {
-    ASSERT(this->api_version_ == TcclContextAPI::V1, "API version mismatch");
+void TcclContext::send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey) {
+    ASSERT(this->api_version_ == TcclContextAPI::Default, "API version mismatch");
     Ticket ticket {};
     ticket.stream_id = stream_id;
     ticket.addr = addr;
@@ -684,8 +708,8 @@ void TcclContext::send_v1(uint32_t stream_id, uint64_t addr, uint32_t length, ui
     this->send_request_command_queue_->enqueue(ticket);
 }
 
-void TcclContext::recv_v1(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey) {
-    ASSERT(this->api_version_ == TcclContextAPI::V1, "API version mismatch");
+void TcclContext::recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey) {
+    ASSERT(this->api_version_ == TcclContextAPI::Default, "API version mismatch");
     auto flag = std::make_shared<std::atomic<int>>(0);
     Ticket ticket {};
     ticket.stream_id = stream_id;
@@ -699,33 +723,10 @@ void TcclContext::recv_v1(uint32_t stream_id, uint64_t addr, uint32_t length, ui
     }
 }
 
-void TcclContext::send_v2(uint32_t stream_id, uint64_t addr, uint32_t length) {
-    ASSERT(this->api_version_ == TcclContextAPI::V2, "API version mismatch");
-    Ticket ticket {};
-    ticket.stream_id = stream_id;
-    ticket.addr = addr;
-    ticket.length = length;
-    this->send_request_command_queue_->enqueue(ticket);
-}
-
-void TcclContext::recv_v2(uint32_t stream_id, uint64_t addr, uint32_t length) {
-    ASSERT(this->api_version_ == TcclContextAPI::V2, "API version mismatch");
-    auto flag = std::make_shared<std::atomic<int>>(0);
-    Ticket ticket {};
-    ticket.stream_id = stream_id;
-    ticket.addr = addr;
-    ticket.length = length;
-    Command command = std::make_tuple(ticket, flag);
-    this->recv_request_command_queue_->enqueue(command);
-    while (flag->load() == 0) {
-        std::this_thread::yield();
-    }
-}
-
 // local_send_request_queue is received from Send Request like NcclSend
 // local_recv_request_queue is received from Recv Request like NcclRecv
 // remote_recv_request_queue is received from remote side sender.
-void TcclContext::thread_post_send_v1(
+void TcclContext::thread_post_send(
     std::shared_ptr<RcQueuePair> qp,
     std::unique_ptr<MemoryRegion> host_send_buffer,
     std::shared_ptr<std::atomic<bool>> finalized,
@@ -853,7 +854,7 @@ void TcclContext::thread_post_send_v1(
     delete[] wc_buffer;
 }
 
-void TcclContext::thread_post_recv_v1(
+void TcclContext::thread_post_recv(
     std::shared_ptr<RcQueuePair> qp,
     std::unique_ptr<MemoryRegion> host_recv_buffer,
     std::shared_ptr<std::atomic<bool>> finalized,
@@ -916,6 +917,82 @@ void TcclContext::thread_post_recv_v1(
     }
 
     delete[] wc_buffer;
+}
+
+TcclContext::TcclContext(
+    std::unique_ptr<RcQueuePair> qp,
+    std::shared_ptr<MemoryRegion> device_send_buffer,
+    std::shared_ptr<MemoryRegion> device_recv_buffer,
+    mem_cpy_fp mem_cpy_func
+) noexcept(false) {
+    this->initialize_v2(std::move(qp), device_send_buffer, device_recv_buffer, mem_cpy_func);
+}
+
+std::shared_ptr<TcclContext> TcclContext::create_v2(
+    std::unique_ptr<RcQueuePair> qp,
+    std::shared_ptr<MemoryRegion> device_send_buffer,
+    std::shared_ptr<MemoryRegion> device_recv_buffer,
+    mem_cpy_fp mem_cpy_func
+) noexcept(false) {
+    return std::shared_ptr<TcclContext>(
+        new TcclContext(std::move(qp), device_send_buffer, device_recv_buffer, mem_cpy_func)
+    );
+}
+
+void TcclContext::initialize_v2(
+    std::unique_ptr<RcQueuePair> qp,
+    std::shared_ptr<MemoryRegion> device_send_buffer,
+    std::shared_ptr<MemoryRegion> device_recv_buffer,
+    mem_cpy_fp mem_cpy_func
+) noexcept(false) {
+    std::shared_ptr<std::atomic<bool>> finalized = std::make_shared<std::atomic<bool>>(false);
+
+    auto local_send_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
+    auto recv_command_queue = Queue<Command>(new moodycamel::ConcurrentQueue<Command>());
+
+    std::shared_ptr<RcQueuePair> shared_qp = std::move(qp);
+
+    auto t1 = std::thread(
+        thread_post_send_v2,
+        shared_qp,
+        device_send_buffer,
+        finalized,
+        mem_cpy_func,
+        local_send_request_queue
+    );
+
+    auto t2 =
+        std::thread(thread_post_recv_v2, shared_qp, device_recv_buffer, finalized, mem_cpy_func, recv_command_queue);
+
+    this->thread_post_send_ = std::move(t1);
+    this->thread_post_recv_ = std::move(t2);
+    this->recv_request_command_queue_ = std::move(recv_command_queue);
+    this->send_request_command_queue_ = std::move(local_send_request_queue);
+    this->finalized_ = finalized;
+    this->api_version_ = TcclContextAPI::V2;
+}
+
+void TcclContext::send_v2(uint32_t stream_id, uint64_t addr, uint32_t length) {
+    ASSERT(this->api_version_ == TcclContextAPI::V2, "API version mismatch");
+    Ticket ticket {};
+    ticket.stream_id = stream_id;
+    ticket.addr = addr;
+    ticket.length = length;
+    this->send_request_command_queue_->enqueue(ticket);
+}
+
+void TcclContext::recv_v2(uint32_t stream_id, uint64_t addr, uint32_t length) {
+    ASSERT(this->api_version_ == TcclContextAPI::V2, "API version mismatch");
+    auto flag = std::make_shared<std::atomic<int>>(0);
+    Ticket ticket {};
+    ticket.stream_id = stream_id;
+    ticket.addr = addr;
+    ticket.length = length;
+    Command command = std::make_tuple(ticket, flag);
+    this->recv_request_command_queue_->enqueue(command);
+    while (flag->load() == 0) {
+        std::this_thread::yield();
+    }
 }
 
 void TcclContext::thread_post_send_v2(
@@ -1023,83 +1100,6 @@ void TcclContext::thread_post_recv_v2(
     }
 
     delete[] wc_buffer;
-}
-
-void TcclContext::initialize_v1(std::unique_ptr<RcQueuePair> qp) noexcept(false) {
-    auto host_send_buffer = std::shared_ptr<void>(new Ticket[kSlotNum], [](Ticket* p) { delete[] p; });
-    auto host_recv_buffer = std::shared_ptr<void>(new Ticket[kSlotNum], [](Ticket* p) { delete[] p; });
-
-    auto host_send_buffer_mr = MemoryRegion::create(qp->get_pd(), host_send_buffer, kHostBufferSize);
-    auto host_recv_buffer_mr = MemoryRegion::create(qp->get_pd(), host_recv_buffer, kHostBufferSize);
-
-    std::shared_ptr<std::atomic<bool>> finalized = std::make_shared<std::atomic<bool>>(false);
-
-    auto local_send_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
-    auto local_recv_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
-    auto remote_recv_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
-    auto recv_command_queue = Queue<Command>(new moodycamel::ConcurrentQueue<Command>());
-
-    std::shared_ptr<RcQueuePair> shared_qp = std::move(qp);
-
-    std::thread t1(
-        thread_post_send_v1,
-        shared_qp,
-        std::move(host_send_buffer_mr),
-        finalized,
-        local_send_request_queue,
-        local_recv_request_queue,
-        remote_recv_request_queue
-    );
-
-    std::thread t2(
-        thread_post_recv_v1,
-        shared_qp,
-        std::move(host_recv_buffer_mr),
-        finalized,
-        recv_command_queue,
-        local_recv_request_queue,
-        remote_recv_request_queue
-    );
-
-    this->thread_post_send_ = std::move(t1);
-    this->thread_post_recv_ = std::move(t2);
-    this->recv_request_command_queue_ = std::move(recv_command_queue);
-    this->send_request_command_queue_ = std::move(local_send_request_queue);
-    this->finalized_ = finalized;
-    this->api_version_ = TcclContextAPI::V1;
-}
-
-void TcclContext::initialize_v2(
-    std::unique_ptr<RcQueuePair> qp,
-    std::shared_ptr<MemoryRegion> device_send_buffer,
-    std::shared_ptr<MemoryRegion> device_recv_buffer,
-    mem_cpy_fp mem_cpy_func
-) noexcept(false) {
-    std::shared_ptr<std::atomic<bool>> finalized = std::make_shared<std::atomic<bool>>(false);
-
-    auto local_send_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
-    auto recv_command_queue = Queue<Command>(new moodycamel::ConcurrentQueue<Command>());
-
-    std::shared_ptr<RcQueuePair> shared_qp = std::move(qp);
-
-    auto t1 = std::thread(
-        thread_post_send_v2,
-        shared_qp,
-        device_send_buffer,
-        finalized,
-        mem_cpy_func,
-        local_send_request_queue
-    );
-
-    auto t2 =
-        std::thread(thread_post_recv_v2, shared_qp, device_recv_buffer, finalized, mem_cpy_func, recv_command_queue);
-
-    this->thread_post_send_ = std::move(t1);
-    this->thread_post_recv_ = std::move(t2);
-    this->recv_request_command_queue_ = std::move(recv_command_queue);
-    this->send_request_command_queue_ = std::move(local_send_request_queue);
-    this->finalized_ = finalized;
-    this->api_version_ = TcclContextAPI::V2;
 }
 
 TcclContext::~TcclContext() {

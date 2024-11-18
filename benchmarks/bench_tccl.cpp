@@ -52,7 +52,7 @@ void sender_thread(
     const uint32_t lkey = data_mr->get_lkey();
 
     for (int i = 0; i < kDataBufferSize / kChunkSize; ++i) {
-        context->send_v1(stream_id, base_addr + i * kChunkSize, kChunkSize, lkey);
+        context->send(stream_id, base_addr + i * kChunkSize, kChunkSize, lkey);
     }
 
     while (bytes_transferred.load() < kDataBufferSize) {
@@ -69,7 +69,7 @@ void recver_thread(
     const uint32_t rkey = data_mr->get_rkey();
 
     for (int i = 0; i < kDataBufferSize / kChunkSize; ++i) {
-        context->recv_v1(stream_id, base_addr + i * kChunkSize, kChunkSize, rkey);
+        context->recv(stream_id, base_addr + i * kChunkSize, kChunkSize, rkey);
         bytes_transferred.fetch_add(kChunkSize);
     }
 };
@@ -111,8 +111,8 @@ int main() {
     );
 #endif
 
-    auto context1 = rdma_util::TcclContext::create_v1(std::move(qp1));
-    auto context2 = rdma_util::TcclContext::create_v1(std::move(qp2));
+    auto context1 = rdma_util::TcclContext::create(std::move(qp1));
+    auto context2 = rdma_util::TcclContext::create(std::move(qp2));
 
     std::thread reporter(reporter_thread);
     std::thread sender(sender_thread, context1, data_mr1, 0);

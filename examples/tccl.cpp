@@ -41,20 +41,20 @@ int main() {
 
     printf("created data mr\n");
 
-    auto context1 = rdma_util::TcclContext::create_v1(std::move(qp1));
-    auto context2 = rdma_util::TcclContext::create_v1(std::move(qp2));
+    auto context1 = rdma_util::TcclContext::create(std::move(qp1));
+    auto context2 = rdma_util::TcclContext::create(std::move(qp2));
 
     printf("created tccl context\n");
 
-    context1->send_v1(0, uint64_t(data_mr_1->get_addr()), 64 * 1024 * 1024, data_mr_1->get_lkey());
-    context1->send_v1(0, uint64_t(data_mr_1->get_addr()), 64 * 1024 * 1024, data_mr_1->get_lkey());
-    context1->send_v1(3, uint64_t(data_mr_1->get_addr()), 64 * 1024 * 1024, data_mr_1->get_lkey());
-    context1->send_v1(2, uint64_t(data_mr_1->get_addr()), 64 * 1024 * 1024, data_mr_1->get_lkey());
+    context1->send(0, uint64_t(data_mr_1->get_addr()), 64 * 1024 * 1024, data_mr_1->get_lkey());
+    context1->send(0, uint64_t(data_mr_1->get_addr()), 64 * 1024 * 1024, data_mr_1->get_lkey());
+    context1->send(3, uint64_t(data_mr_1->get_addr()), 64 * 1024 * 1024, data_mr_1->get_lkey());
+    context1->send(2, uint64_t(data_mr_1->get_addr()), 64 * 1024 * 1024, data_mr_1->get_lkey());
 
-    context2->recv_v1(0, uint64_t(data_mr_2->get_addr()), 64 * 1024 * 1024, data_mr_2->get_rkey());
-    context2->recv_v1(2, uint64_t(data_mr_2->get_addr()), 64 * 1024 * 1024, data_mr_2->get_rkey());
-    context2->recv_v1(3, uint64_t(data_mr_2->get_addr()), 64 * 1024 * 1024, data_mr_2->get_rkey());
-    context2->recv_v1(0, uint64_t(data_mr_2->get_addr()), 64 * 1024 * 1024, data_mr_2->get_rkey());
+    context2->recv(0, uint64_t(data_mr_2->get_addr()), 64 * 1024 * 1024, data_mr_2->get_rkey());
+    context2->recv(2, uint64_t(data_mr_2->get_addr()), 64 * 1024 * 1024, data_mr_2->get_rkey());
+    context2->recv(3, uint64_t(data_mr_2->get_addr()), 64 * 1024 * 1024, data_mr_2->get_rkey());
+    context2->recv(0, uint64_t(data_mr_2->get_addr()), 64 * 1024 * 1024, data_mr_2->get_rkey());
 
     printf("received\n");
 

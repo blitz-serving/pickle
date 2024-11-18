@@ -337,7 +337,7 @@ using MultiMap = std::map<uint32_t, std::queue<T>>;
 
 enum TcclContextAPI {
     // Using post_send_write_with_imm
-    V1,
+    Default,
     // Using post_send_send
     V2,
 };
@@ -360,12 +360,20 @@ class TcclContext {
     TcclContext(const TcclContext&) = delete;
     TcclContext& operator=(const TcclContext&) = delete;
 
-    // V1 constructor
+  public:
+    ~TcclContext();
+
+  public:
+    static std::shared_ptr<TcclContext> create(std::unique_ptr<RcQueuePair> qp) noexcept(false);
+    void send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
+    void recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);
+
+  private:
     TcclContext(std::unique_ptr<RcQueuePair> qp) noexcept(false);
 
-    void initialize_v1(std::unique_ptr<RcQueuePair> qp) noexcept(false);
+    void initialize(std::unique_ptr<RcQueuePair> qp) noexcept(false);
 
-    static void thread_post_send_v1(
+    static void thread_post_send(
         std::shared_ptr<RcQueuePair> qp,
         std::unique_ptr<MemoryRegion> host_send_buffer,
         std::shared_ptr<std::atomic<bool>> finalized,
@@ -374,7 +382,7 @@ class TcclContext {
         Queue<Ticket> remote_recv_request_queue
     ) noexcept(false);
 
-    static void thread_post_recv_v1(
+    static void thread_post_recv(
         std::shared_ptr<RcQueuePair> qp,
         std::unique_ptr<MemoryRegion> host_recv_buffer,
         std::shared_ptr<std::atomic<bool>> finalized,
@@ -383,7 +391,23 @@ class TcclContext {
         Queue<Ticket> remote_recv_request_queue
     ) noexcept(false);
 
-    // V2 constructtor
+  public:
+    [[deprecated]]
+    static std::shared_ptr<TcclContext> create_v2(
+        std::unique_ptr<RcQueuePair> qp,
+        std::shared_ptr<MemoryRegion> device_send_buffer,
+        std::shared_ptr<MemoryRegion> device_recv_buffer,
+        mem_cpy_fp mem_cpy_func
+    ) noexcept(false);
+
+    [[deprecated]]
+    void send_v2(uint32_t stream_id, uint64_t addr, uint32_t length);
+
+    [[deprecated]]
+    void recv_v2(uint32_t stream_id, uint64_t addr, uint32_t length);
+
+  private:
+    [[deprecated]]
     TcclContext(
         std::unique_ptr<RcQueuePair> qp,
         std::shared_ptr<MemoryRegion> device_send_buffer,
@@ -391,7 +415,7 @@ class TcclContext {
         mem_cpy_fp mem_cpy_func
     ) noexcept(false);
 
-    // V2
+    [[deprecated]]
     void initialize_v2(
         std::unique_ptr<RcQueuePair> qp,
         std::shared_ptr<MemoryRegion> device_send_buffer,
@@ -399,6 +423,7 @@ class TcclContext {
         mem_cpy_fp mem_cpy_func
     ) noexcept(false);
 
+    [[deprecated]]
     static void thread_post_send_v2(
         std::shared_ptr<RcQueuePair> qp,
         std::shared_ptr<MemoryRegion> device_send_buffer,
@@ -407,6 +432,7 @@ class TcclContext {
         Queue<Ticket> local_send_request_queue
     ) noexcept(false);
 
+    [[deprecated]]
     static void thread_post_recv_v2(
         std::shared_ptr<RcQueuePair> qp,
         std::shared_ptr<MemoryRegion> device_recv_buffer,
@@ -414,27 +440,6 @@ class TcclContext {
         mem_cpy_fp mem_cpy_func,
         Queue<Command> recv_command_queue
     ) noexcept(false);
-
-  public:
-    static std::shared_ptr<TcclContext> create_v1(std::unique_ptr<RcQueuePair> qp) noexcept(false);
-    void send_v1(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
-    void recv_v1(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);
-
-    [[deprecated("V2 API is unrecommended. Use create_v1 instead.")]]
-    static std::shared_ptr<TcclContext> create_v2(
-        std::unique_ptr<RcQueuePair> qp,
-        std::shared_ptr<MemoryRegion> device_send_buffer,
-        std::shared_ptr<MemoryRegion> device_recv_buffer,
-        mem_cpy_fp mem_cpy_func
-    ) noexcept(false);
-
-    [[deprecated("V2 API is unrecommended. Use send_v1 instead.")]]
-    void send_v2(uint32_t stream_id, uint64_t addr, uint32_t length);
-
-    [[deprecated("V2 API is unrecommended. Use recv_v1 instead.")]]
-    void recv_v2(uint32_t stream_id, uint64_t addr, uint32_t length);
-
-    ~TcclContext();
 };
 
 }  // namespace rdma_util
