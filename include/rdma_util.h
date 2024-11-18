@@ -14,8 +14,6 @@
 
 #include "concurrentqueue.h"
 
-typedef int (*mem_cpy_fp)(void*, void*, uint64_t);
-
 template<typename T>
 using Arc = std::shared_ptr<T>;
 
