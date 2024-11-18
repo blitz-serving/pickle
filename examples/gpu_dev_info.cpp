@@ -1,5 +1,4 @@
 #include <cstdio>
-#include <memory>
 
 #ifdef USE_CUDA
 
@@ -22,9 +21,8 @@ int main() {
     void* d_ptr;
     cudaMalloc(&d_ptr, 1024);
 
-    std::shared_ptr<rdma_util::ProtectionDomain> pd =
-        rdma_util::ProtectionDomain::create(std::move(rdma_util::Context::create("mlx5_1")));
-    auto mr = rdma_util::MemoryRegion::create(pd, d_ptr, 1024);
+    auto pd = rdma_util::ProtectionDomain::create(std::move(rdma_util::Context::create("mlx5_1")));
+    auto mr = rdma_util::MemoryRegion::create(std::move(pd), d_ptr, 1024);
 
     return 0;
 }
