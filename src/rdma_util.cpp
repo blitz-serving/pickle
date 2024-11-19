@@ -20,7 +20,7 @@
 
 namespace rdma_util {
 
-constexpr uint64_t kSendSlotNum = 1;
+constexpr uint64_t kSendSlotNum = 16;
 constexpr uint64_t kRecvSlotNum = 2 * kSendSlotNum;
 
 #define ASSERT(expr, msg) \

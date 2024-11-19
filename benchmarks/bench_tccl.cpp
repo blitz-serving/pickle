@@ -1,10 +1,11 @@
-#include <rdma_util.h>
-
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <utility>
+#include <vector>
+
+#include "rdma_util.h"
 
 #ifdef USE_CUDA
 
@@ -23,7 +24,7 @@ constexpr const char* kRNIC2 = "mlx5_1";
 constexpr uint32_t kGPU1 = 0;
 constexpr uint32_t kGPU2 = 3;
 
-constexpr uint32_t kChunkSize = 16ull * 1024 * 1024;
+constexpr uint32_t kChunkSize = 256ull * 1024;
 
 std::atomic<uint64_t> bytes_transferred;
 
@@ -51,8 +52,14 @@ void sender_thread(
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t lkey = data_mr->get_lkey();
 
-    for (int i = 0; i < kDataBufferSize / kChunkSize; ++i) {
-        context->send(stream_id, base_addr + i * kChunkSize, kChunkSize, lkey).wait();
+    for (int i = 0; i < kDataBufferSize / kChunkSize / 16; ++i) {
+        std::vector<rdma_util::Handle> handles;
+        for (int j = 0; j < 16; ++j) {
+            handles.push_back(context->send(stream_id, base_addr + (i * 16 + j) * kChunkSize, kChunkSize, lkey));
+        }
+        for (const auto& handle : handles) {
+            handle.wait();
+        }
     }
 
     while (bytes_transferred.load() < kDataBufferSize) {
@@ -68,9 +75,15 @@ void recver_thread(
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t rkey = data_mr->get_rkey();
 
-    for (int i = 0; i < kDataBufferSize / kChunkSize; ++i) {
-        context->recv(stream_id, base_addr + i * kChunkSize, kChunkSize, rkey).wait();
-        bytes_transferred.fetch_add(kChunkSize);
+    for (int i = 0; i < kDataBufferSize / kChunkSize / 16; ++i) {
+        std::vector<rdma_util::Handle> handles;
+        for (int j = 0; j < 16; ++j) {
+            handles.push_back(context->recv(stream_id, base_addr + (i * 16 + j) * kChunkSize, kChunkSize, rkey));
+        }
+        for (const auto& handle : handles) {
+            handle.wait();
+            bytes_transferred.fetch_add(kChunkSize);
+        }
     }
 };
 

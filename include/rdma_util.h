@@ -344,14 +344,14 @@ class Handle {
     /**
      * @brief Check if the send/recv is finished.
      */
-    inline bool is_finished() {
+    inline bool is_finished() const {
         return this->finished_->load(std::memory_order_relaxed);
     }
 
     /**
      * @brief Wait until the operation is finished in a busy looping way.
      */
-    inline void wait() {
+    inline void wait() const {
         while (!this->is_finished()) {
             std::this_thread::yield();
         }

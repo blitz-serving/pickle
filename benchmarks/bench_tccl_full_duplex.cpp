@@ -1,10 +1,10 @@
-#include <rdma_util.h>
-
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <utility>
+
+#include "rdma_util.h"
 
 #ifdef USE_CUDA
 

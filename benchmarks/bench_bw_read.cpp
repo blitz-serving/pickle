@@ -1,5 +1,3 @@
-#include <sys/types.h>
-
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
