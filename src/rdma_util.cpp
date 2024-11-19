@@ -20,9 +20,6 @@
 
 namespace rdma_util {
 
-constexpr uint64_t kSendSlotNum = 16;
-constexpr uint64_t kRecvSlotNum = 2 * kSendSlotNum;
-
 #define ASSERT(expr, msg) \
     if (!(expr)) { \
         printf("Assertion failed: %s:%d %s\n", __FILE__, __LINE__, msg); \
@@ -646,22 +643,14 @@ Box<MemoryRegion> MemoryRegion::create(rdma_util::Arc<ProtectionDomain> pd, void
     return Box<MemoryRegion>(new MemoryRegion(pd, addr, length));
 }
 
-rdma_util::Arc<TcclContext> TcclContext::create(Box<RcQueuePair> qp) noexcept(false) {
-    return rdma_util::Arc<TcclContext>(new TcclContext(std::move(qp)));
+rdma_util::Arc<TcclContext> TcclContext::create(Box<RcQueuePair> qp, uint64_t dop) noexcept(false) {
+    return rdma_util::Arc<TcclContext>(new TcclContext(std::move(qp), dop));
 }
 
-void TcclContext::initialize(Box<RcQueuePair> qp) noexcept(false) {
-    auto host_send_buffer = rdma_util::Arc<void>(new Ticket[kSendSlotNum], [](Ticket* p) { delete[] p; });
-    auto host_recv_buffer = rdma_util::Arc<void>(new Ticket[kRecvSlotNum], [](Ticket* p) { delete[] p; });
-
-    auto host_send_buffer_mr = MemoryRegion::create(qp->get_pd(), host_send_buffer, sizeof(Ticket) * kSendSlotNum);
-    auto host_recv_buffer_mr = MemoryRegion::create(qp->get_pd(), host_recv_buffer, sizeof(Ticket) * kRecvSlotNum);
-
+void TcclContext::initialize(Box<RcQueuePair> qp, uint64_t dop) noexcept(false) {
     rdma_util::Arc<std::atomic<bool>> finalized = std::make_shared<std::atomic<bool>>(false);
-
     auto local_recv_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
     auto remote_recv_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
-
     auto recv_command_queue = Queue<Command>(new moodycamel::ConcurrentQueue<Command>());
     auto send_command_queue = Queue<Command>(new moodycamel::ConcurrentQueue<Command>());
 
@@ -670,7 +659,7 @@ void TcclContext::initialize(Box<RcQueuePair> qp) noexcept(false) {
     std::thread t1(
         thread_post_send,
         shared_qp,
-        std::move(host_send_buffer_mr),
+        dop,
         finalized,
         send_command_queue,
         local_recv_request_queue,
@@ -680,7 +669,7 @@ void TcclContext::initialize(Box<RcQueuePair> qp) noexcept(false) {
     std::thread t2(
         thread_post_recv,
         shared_qp,
-        std::move(host_recv_buffer_mr),
+        dop,
         finalized,
         recv_command_queue,
         local_recv_request_queue,
@@ -692,10 +681,11 @@ void TcclContext::initialize(Box<RcQueuePair> qp) noexcept(false) {
     this->recv_request_command_queue_ = std::move(recv_command_queue);
     this->send_request_command_queue_ = std::move(send_command_queue);
     this->finalized_ = finalized;
+    this->dop_ = dop;
 }
 
-TcclContext::TcclContext(Box<RcQueuePair> qp) noexcept(false) {
-    this->initialize(std::move(qp));
+TcclContext::TcclContext(Box<RcQueuePair> qp, uint64_t dop) noexcept(false) {
+    this->initialize(std::move(qp), dop);
 }
 
 Handle TcclContext::send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey) {
@@ -727,12 +717,18 @@ Handle TcclContext::recv(uint32_t stream_id, uint64_t addr, uint32_t length, uin
 // remote_recv_request_queue is received from remote side sender.
 void TcclContext::thread_post_send(
     rdma_util::Arc<RcQueuePair> qp,
-    Box<MemoryRegion> host_send_buffer,
+    uint64_t dop,
     rdma_util::Arc<std::atomic<bool>> finalized,
     Queue<Command> send_command_queue,
     Queue<Ticket> local_recv_request_queue,
     Queue<Ticket> remote_recv_request_queue
 ) noexcept(false) {
+    auto host_send_buffer = MemoryRegion::create(
+        qp->get_pd(),
+        rdma_util::Arc<void>(new Ticket[dop], [](Ticket* p) { delete[] p; }),
+        sizeof(Ticket) * dop
+    );
+
     constexpr uint64_t chunksize = uint64_t(sizeof(Ticket));
     const uint64_t buffer_addr = uint64_t(host_send_buffer->get_addr());
     const uint32_t lkey = host_send_buffer->get_lkey();
@@ -744,8 +740,8 @@ void TcclContext::thread_post_send(
     MultiMap<rdma_util::Arc<std::atomic<bool>>> pending_local_send_flag_map;
 
     std::vector<WorkCompletion> polled_send_wcs;
-    polled_send_wcs.reserve(2 * kSendSlotNum);
-    ibv_wc* wc_buffer = new ibv_wc[2 * kSendSlotNum];
+    polled_send_wcs.reserve(2 * dop);
+    ibv_wc* wc_buffer = new ibv_wc[2 * dop];
 
     Ticket tickets[16];
     Command command;
@@ -753,10 +749,10 @@ void TcclContext::thread_post_send(
 
     std::queue<uint64_t> free_post_send_send_slots;
 
-    uint64_t post_send_write_slot_available = kSendSlotNum;
-    uint64_t post_send_send_slot_available = kSendSlotNum;
+    uint64_t post_send_write_slot_available = dop;
+    uint64_t post_send_send_slot_available = dop;
 
-    for (uint64_t wr_id = 0; wr_id < kSendSlotNum; ++wr_id) {
+    for (uint64_t wr_id = 0; wr_id < dop; ++wr_id) {
         free_post_send_send_slots.push(wr_id);
     }
 
@@ -830,7 +826,7 @@ void TcclContext::thread_post_send(
             }
         }
 
-        int ret = qp->poll_send_cq_once(2 * kSendSlotNum, wc_buffer, polled_send_wcs);
+        int ret = qp->poll_send_cq_once(2 * dop, wc_buffer, polled_send_wcs);
 
         if (ret < 0) {
             throw std::runtime_error("Failed to poll send CQ");
@@ -858,24 +854,30 @@ void TcclContext::thread_post_send(
 
 void TcclContext::thread_post_recv(
     rdma_util::Arc<RcQueuePair> qp,
-    Box<MemoryRegion> host_recv_buffer,
+    uint64_t dop,
     rdma_util::Arc<std::atomic<bool>> finalized,
     Queue<Command> recv_command_queue,
     Queue<Ticket> local_recv_request_queue,
     Queue<Ticket> remote_recv_request_queue
 ) noexcept(false) {
+    auto host_recv_buffer = MemoryRegion::create(
+        qp->get_pd(),
+        rdma_util::Arc<void>(new Ticket[2 * dop], [](Ticket* p) { delete[] p; }),
+        sizeof(Ticket) * 2 * dop
+    );
+
     constexpr uint64_t chunksize = uint64_t(sizeof(Ticket));
     const uint64_t buffer_addr = uint64_t(host_recv_buffer->get_addr());
     const uint32_t lkey = host_recv_buffer->get_lkey();
 
-    for (uint64_t wr_id = 0; wr_id < kRecvSlotNum; ++wr_id) {
+    for (uint64_t wr_id = 0; wr_id < 2 * dop; ++wr_id) {
         qp->post_recv(wr_id, buffer_addr + wr_id * chunksize, chunksize, lkey);
     }
 
     std::vector<WorkCompletion> polled_recv_wcs;
-    polled_recv_wcs.reserve(kRecvSlotNum);
+    polled_recv_wcs.reserve(2 * dop);
 
-    ibv_wc* wc_buffer = new ibv_wc[kRecvSlotNum];
+    ibv_wc* wc_buffer = new ibv_wc[2 * dop];
 
     uint64_t count_dequeued = 0;
     Command command;
@@ -890,7 +892,7 @@ void TcclContext::thread_post_recv(
             pending_local_recv_request_map[ticket.stream_id].push(flag);
         }
 
-        int ret = qp->poll_recv_cq_once(kRecvSlotNum, wc_buffer, polled_recv_wcs);
+        int ret = qp->poll_recv_cq_once(2 * dop, wc_buffer, polled_recv_wcs);
         if (ret > 0) {
             for (const auto& wc : polled_recv_wcs) {
                 if (wc.status != IBV_WC_SUCCESS) {

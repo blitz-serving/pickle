@@ -363,6 +363,8 @@ class TcclContext {
     Queue<Command> send_request_command_queue_;
     Queue<Command> recv_request_command_queue_;
 
+    uint64_t dop_;
+
     // Backgound worker threads
     std::thread thread_post_send_;
     std::thread thread_post_recv_;
@@ -377,18 +379,22 @@ class TcclContext {
     ~TcclContext();
 
   public:
-    static Arc<TcclContext> create(Box<RcQueuePair> qp) noexcept(false);
+    inline uint64_t get_dop() const {
+        return this->dop_;
+    }
+
+    static Arc<TcclContext> create(Box<RcQueuePair> qp, uint64_t dop = 16) noexcept(false);
     [[nodiscard]] Handle send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
     [[nodiscard]] Handle recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);
 
   private:
-    TcclContext(Box<RcQueuePair> qp) noexcept(false);
+    TcclContext(Box<RcQueuePair> qp, uint64_t dop) noexcept(false);
 
-    void initialize(Box<RcQueuePair> qp) noexcept(false);
+    void initialize(Box<RcQueuePair> qp, uint64_t dop) noexcept(false);
 
     static void thread_post_send(
         Arc<RcQueuePair> qp,
-        Box<MemoryRegion> host_send_buffer,
+        uint64_t dop,
         Arc<std::atomic<bool>> finalized,
         Queue<Command> send_command_queue,
         Queue<Ticket> local_recv_request_queue,
@@ -397,7 +403,7 @@ class TcclContext {
 
     static void thread_post_recv(
         Arc<RcQueuePair> qp,
-        Box<MemoryRegion> host_recv_buffer,
+        uint64_t dop,
         Arc<std::atomic<bool>> finalized,
         Queue<Command> recv_command_queue,
         Queue<Ticket> local_recv_request_queue,
