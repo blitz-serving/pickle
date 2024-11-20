@@ -1,15 +1,16 @@
 cmake_minimum_required(VERSION 3.5 FATAL_ERROR)
+cmake_policy(SET CMP0077 NEW)
 project(NanoGDR LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-set(CMAKE_BUILD_TYPE Release)
 
 option(BUILD_TESTS "Build tests" ON)
 option(BUILD_EXAMPLES "Build examples" ON)
 option(BUILD_BENCHMARKS "Build benchmarks" ON)
 option(USE_CUDA "Use CUDA" ON)
+option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 
 # Add third-party libraries
 add_subdirectory(third_party/concurrentqueue)
@@ -19,7 +20,7 @@ if(BUILD_TESTS)
 endif()
 
 # Create rdma_util library
-add_library(rdma_util STATIC "src/rdma_util.cpp")
+add_library(rdma_util "src/rdma_util.cpp")
 target_link_libraries(rdma_util PUBLIC ibverbs concurrentqueue)
 target_include_directories(rdma_util PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -30,7 +31,7 @@ target_include_directories(rdma_util PUBLIC
 if(USE_CUDA)
     set(CUDA_TOOLKIT_ROOT_DIR "/usr/local/cuda")
     find_package(CUDA REQUIRED)
-    add_library(gpu_mem_util STATIC "src/gpu_mem_util.cpp")
+    add_library(gpu_mem_util "src/gpu_mem_util.cpp")
     message(STATUS "CUDA_INCLUDE_DIRS: ${CUDA_INCLUDE_DIRS}")
     message(STATUS "CUDA_LIBRARIES: ${CUDA_LIBRARIES}")
     target_link_libraries(gpu_mem_util PUBLIC ${CUDA_LIBRARIES})
