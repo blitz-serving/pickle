@@ -744,7 +744,7 @@ void TcclContext::thread_post_send(
     ibv_wc* wc_buffer = new ibv_wc[2 * dop];
 
     Ticket tickets[16];
-    Command command;
+    std::vector<Command> commands(dop);
     uint64_t count_dequeued = 0;
 
     std::queue<uint64_t> free_post_send_send_slots;
@@ -758,11 +758,14 @@ void TcclContext::thread_post_send(
 
     while (!finalized->load(std::memory_order_relaxed)) {
         // Received from send request
-        while (send_command_queue->try_dequeue(command)) {
-            auto ticket = std::get<0>(command);
-            auto flag = std::get<1>(command);
-            pending_local_send_request_map[ticket.stream_id].push(ticket);
-            pending_local_send_flag_map[ticket.stream_id].push(flag);
+        if (post_send_send_slot_available > 0) {
+            count_dequeued = send_command_queue->try_dequeue_bulk(commands.begin(), dop);
+            for (uint64_t i = 0; i < count_dequeued; ++i) {
+                auto ticket = std::get<0>(commands[i]);
+                auto flag = std::get<1>(commands[i]);
+                pending_local_send_request_map[ticket.stream_id].push(ticket);
+                pending_local_send_flag_map[ticket.stream_id].push(flag);
+            }
         }
 
         // Received from recv request
@@ -879,18 +882,18 @@ void TcclContext::thread_post_recv(
 
     ibv_wc* wc_buffer = new ibv_wc[2 * dop];
 
-    uint64_t count_dequeued = 0;
-    Command command;
+    std::vector<Command> commands(dop);
+    std::vector<Ticket> tickets(dop);
 
     MultiMap<rdma_util::Arc<std::atomic<bool>>> pending_local_recv_request_map;
 
     while (!finalized->load(std::memory_order_relaxed)) {
-        while (recv_command_queue->try_dequeue(command)) {
-            auto ticket = std::get<0>(command);
-            auto flag = std::get<1>(command);
-            local_recv_request_queue->enqueue(ticket);
-            pending_local_recv_request_map[ticket.stream_id].push(flag);
+        uint64_t dequeued_count = recv_command_queue->try_dequeue_bulk(commands.begin(), dop);
+        for (uint64_t i = 0; i < dequeued_count; ++i) {
+            tickets[i] = std::get<0>(commands[i]);
+            pending_local_recv_request_map[tickets[i].stream_id].push(std::get<1>(commands[i]));
         }
+        local_recv_request_queue->enqueue_bulk(tickets.begin(), dequeued_count);
 
         int ret = qp->poll_recv_cq_once(2 * dop, wc_buffer, polled_recv_wcs);
         if (ret > 0) {

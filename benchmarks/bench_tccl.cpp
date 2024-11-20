@@ -20,13 +20,15 @@ constexpr uint64_t kDataBufferSize = 40ull * 1024 * 1024 * 1024;
 #endif
 
 constexpr const char* kRNIC1 = "mlx5_0";
-constexpr const char* kRNIC2 = "mlx5_1";
+constexpr const char* kRNIC2 = "mlx5_4";
 constexpr uint32_t kGPU1 = 0;
-constexpr uint32_t kGPU2 = 3;
+constexpr uint32_t kGPU2 = 4;
 
 constexpr uint32_t kChunkSize = 256ull * 1024;
+constexpr uint64_t dop = 4096;
 
-std::atomic<uint64_t> bytes_transferred;
+static std::atomic<uint64_t> bytes_transferred(0);
+static std::atomic<bool> recver_exited(false);
 
 void reporter_thread() {
     uint64_t prev = 0, curr = 0;
@@ -38,7 +40,7 @@ void reporter_thread() {
         bandwidth = (curr - prev) / 1024.0 / 1024.0 / 1024.0;
         printf("Bandwidth: %.2f GB/s\n", bandwidth);
         prev = curr;
-        if (curr >= kDataBufferSize) {
+        if (recver_exited.load()) {
             return;
         }
     }
@@ -52,10 +54,10 @@ void sender_thread(
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t lkey = data_mr->get_lkey();
 
-    for (int i = 0; i < kDataBufferSize / kChunkSize / 16; ++i) {
+    for (int i = 0; i < kDataBufferSize / kChunkSize / dop; ++i) {
         std::vector<rdma_util::Handle> handles;
-        for (int j = 0; j < 16; ++j) {
-            handles.push_back(context->send(stream_id, base_addr + (i * 16 + j) * kChunkSize, kChunkSize, lkey));
+        for (int j = 0; j < dop; ++j) {
+            handles.push_back(context->send(stream_id, base_addr + (i * dop + j) * kChunkSize, kChunkSize, lkey));
         }
         for (const auto& handle : handles) {
             handle.wait();
@@ -75,16 +77,17 @@ void recver_thread(
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t rkey = data_mr->get_rkey();
 
-    for (int i = 0; i < kDataBufferSize / kChunkSize / 16; ++i) {
+    for (int i = 0; i < kDataBufferSize / kChunkSize / dop; ++i) {
         std::vector<rdma_util::Handle> handles;
-        for (int j = 0; j < 16; ++j) {
-            handles.push_back(context->recv(stream_id, base_addr + (i * 16 + j) * kChunkSize, kChunkSize, rkey));
+        for (int j = 0; j < dop; ++j) {
+            handles.push_back(context->recv(stream_id, base_addr + (i * dop + j) * kChunkSize, kChunkSize, rkey));
         }
         for (const auto& handle : handles) {
             handle.wait();
             bytes_transferred.fetch_add(kChunkSize);
         }
     }
+    recver_exited.store(true);
 };
 
 int main() {
