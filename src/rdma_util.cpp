@@ -886,14 +886,18 @@ void TcclContext::thread_post_recv(
     std::vector<Ticket> tickets(dop);
 
     MultiMap<rdma_util::Arc<std::atomic<bool>>> pending_local_recv_request_map;
+    uint64_t pending_recv_request_count = 0;
 
     while (!finalized->load(std::memory_order_relaxed)) {
-        uint64_t dequeued_count = recv_command_queue->try_dequeue_bulk(commands.begin(), dop);
-        for (uint64_t i = 0; i < dequeued_count; ++i) {
-            tickets[i] = std::get<0>(commands[i]);
-            pending_local_recv_request_map[tickets[i].stream_id].push(std::get<1>(commands[i]));
+        if (pending_recv_request_count < 2 * dop) {
+            const uint64_t dequeued_count = recv_command_queue->try_dequeue_bulk(commands.begin(), dop);
+            for (uint64_t i = 0; i < dequeued_count; ++i) {
+                tickets[i] = std::get<0>(commands[i]);
+                pending_local_recv_request_map[tickets[i].stream_id].push(std::get<1>(commands[i]));
+                pending_recv_request_count++;
+            }
+            local_recv_request_queue->enqueue_bulk(tickets.begin(), dequeued_count);
         }
-        local_recv_request_queue->enqueue_bulk(tickets.begin(), dequeued_count);
 
         int ret = qp->poll_recv_cq_once(2 * dop, wc_buffer, polled_recv_wcs);
         if (ret > 0) {
@@ -908,6 +912,7 @@ void TcclContext::thread_post_recv(
                             pending_local_recv_request_map[wc.imm_data];
                         queue.front()->store(1);
                         queue.pop();
+                        pending_recv_request_count--;
                     } else {
                         // printf("Polled IBV_WC_RECV wc: %s\n", wc.to_string().c_str());
                         Ticket ticket {};
