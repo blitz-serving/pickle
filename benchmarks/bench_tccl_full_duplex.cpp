@@ -10,6 +10,8 @@
 
 #include "gpu_mem_util.h"
 
+constexpr uint32_t kGPU1 = 0;
+constexpr uint32_t kGPU2 = 3;
 constexpr uint64_t kDataBufferSize = 75ull * 1024 * 1024 * 1024;
 
 #else
@@ -20,8 +22,6 @@ constexpr uint64_t kDataBufferSize = 40ull * 1024 * 1024 * 1024;
 
 constexpr const char* kRNIC1 = "mlx5_0";
 constexpr const char* kRNIC2 = "mlx5_1";
-constexpr uint32_t kGPU1 = 0;
-constexpr uint32_t kGPU2 = 3;
 
 constexpr uint32_t kChunkSize = 16ull * 1024 * 1024;
 
@@ -49,7 +49,7 @@ void sender_thread(
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t lkey = data_mr->get_lkey();
 
-    for (int i = 0; i < kDataBufferSize / kChunkSize; ++i) {
+    for (uint64_t i = 0; i < kDataBufferSize / kChunkSize; ++i) {
         context->send(stream_id, base_addr + i * kChunkSize, kChunkSize, lkey).wait();
     }
 
@@ -67,7 +67,7 @@ void recver_thread(
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t rkey = data_mr->get_rkey();
 
-    for (int i = 0; i < kDataBufferSize / kChunkSize; ++i) {
+    for (uint64_t i = 0; i < kDataBufferSize / kChunkSize; ++i) {
         context->recv(stream_id, base_addr + (kDataBufferSize / kChunkSize - i - 1) * kChunkSize, kChunkSize, rkey)
             .wait();
         bytes_transferred.fetch_add(kChunkSize);

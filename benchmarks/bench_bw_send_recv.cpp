@@ -9,7 +9,11 @@
 #include "rdma_util.h"
 
 #ifdef USE_CUDA
+
 #include "gpu_mem_util.h"
+constexpr uint32_t kGPU1 = 2;
+constexpr uint32_t kGPU2 = 7;
+
 #endif
 
 constexpr uint64_t kChunkSize = 64ull * 1024 * 1024;
@@ -20,8 +24,6 @@ constexpr uint64_t kThreadNum = 1;
 
 constexpr const char* kRNIC1 = "mlx5_1";
 constexpr const char* kRNIC2 = "mlx5_5";
-constexpr uint32_t kGPU1 = 2;
-constexpr uint32_t kGPU2 = 7;
 
 static std::atomic<uint64_t> g_bytes_transferred(0);
 
@@ -49,17 +51,17 @@ int main() {
         std::vector<rdma_util::Arc<rdma_util::RcQueuePair>> qp_list_2;
 
         rdma_util::Arc<rdma_util::ProtectionDomain> pd1 =
-            rdma_util::ProtectionDomain::create(std::move(rdma_util::Context::create(kRNIC1)));
+            rdma_util::ProtectionDomain::create(rdma_util::Context::create(kRNIC1));
         rdma_util::Arc<rdma_util::MemoryRegion> mr1 = rdma_util::MemoryRegion::create(pd1, send_buffer, kBufferSize);
 
         rdma_util::Arc<rdma_util::ProtectionDomain> pd2 =
-            rdma_util::ProtectionDomain::create(std::move(rdma_util::Context::create(kRNIC2)));
+            rdma_util::ProtectionDomain::create(rdma_util::Context::create(kRNIC2));
         rdma_util::Arc<rdma_util::MemoryRegion> mr2 = rdma_util::MemoryRegion::create(pd2, recv_buffer, kBufferSize);
 
         printf("mr1: %p\n", mr1->get_addr());
         printf("mr2: %p\n", mr2->get_addr());
 
-        for (int i = 0; i < kThreadNum; ++i) {
+        for (uint64_t i = 0; i < kThreadNum; ++i) {
             rdma_util::Arc<rdma_util::RcQueuePair> qp1 = rdma_util::RcQueuePair::create(pd1);
             rdma_util::Arc<rdma_util::RcQueuePair> qp2 = rdma_util::RcQueuePair::create(pd2);
 
@@ -70,7 +72,7 @@ int main() {
             qp_list_2.push_back(qp2);
         }
 
-        for (int i = 0; i < kThreadNum; ++i) {
+        for (uint64_t i = 0; i < kThreadNum; ++i) {
             threads.push_back(std::thread(recver_thread, qp_list_2[i], mr2));
             threads.push_back(std::thread(sender_thread, qp_list_1[i], mr1));
         }
@@ -115,7 +117,7 @@ int recver_thread(rdma_util::Arc<rdma_util::RcQueuePair> qp, rdma_util::Arc<rdma
 
     uint64_t recv_posted = 0, recv_polled = 0;
 
-    for (int i = 0; i < 2 * kSlotNum; ++i) {
+    for (uint64_t i = 0; i < 2 * kSlotNum; ++i) {
         qp->post_recv(i, base_addr + i * kChunkSize, kChunkSize, lkey);
         recv_posted++;
     }
@@ -147,7 +149,7 @@ int sender_thread(rdma_util::Arc<rdma_util::RcQueuePair> qp, rdma_util::Arc<rdma
 
     uint64_t send_posted = 0, send_polled = 0;
 
-    for (int i = 0; i < kSlotNum; ++i) {
+    for (uint64_t i = 0; i < kSlotNum; ++i) {
         qp->post_send_send(i, base_addr + i * kChunkSize, kChunkSize, lkey, true);
         send_posted++;
     }

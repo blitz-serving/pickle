@@ -11,6 +11,8 @@
 
 #include "gpu_mem_util.h"
 
+constexpr uint32_t kGPU1 = 0;
+constexpr uint32_t kGPU2 = 4;
 constexpr uint64_t kDataBufferSize = 75ull * 1024 * 1024 * 1024;
 
 #else
@@ -21,8 +23,6 @@ constexpr uint64_t kDataBufferSize = 40ull * 1024 * 1024 * 1024;
 
 constexpr const char* kRNIC1 = "mlx5_0";
 constexpr const char* kRNIC2 = "mlx5_4";
-constexpr uint32_t kGPU1 = 0;
-constexpr uint32_t kGPU2 = 4;
 
 constexpr uint32_t kChunkSize = 256ull * 1024;
 constexpr uint64_t dop = 4096;
@@ -54,9 +54,9 @@ void sender_thread(
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t lkey = data_mr->get_lkey();
 
-    for (int i = 0; i < kDataBufferSize / kChunkSize / dop; ++i) {
+    for (uint64_t i = 0; i < kDataBufferSize / kChunkSize / dop; ++i) {
         std::vector<rdma_util::Handle> handles;
-        for (int j = 0; j < dop; ++j) {
+        for (uint64_t j = 0; j < dop; ++j) {
             handles.push_back(context->send(stream_id, base_addr + (i * dop + j) * kChunkSize, kChunkSize, lkey));
         }
         for (const auto& handle : handles) {
@@ -77,9 +77,9 @@ void recver_thread(
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t rkey = data_mr->get_rkey();
 
-    for (int i = 0; i < kDataBufferSize / kChunkSize / dop; ++i) {
+    for (uint64_t i = 0; i < kDataBufferSize / kChunkSize / dop; ++i) {
         std::vector<rdma_util::Handle> handles;
-        for (int j = 0; j < dop; ++j) {
+        for (uint64_t j = 0; j < dop; ++j) {
             handles.push_back(context->recv(stream_id, base_addr + (i * dop + j) * kChunkSize, kChunkSize, rkey));
         }
         for (const auto& handle : handles) {

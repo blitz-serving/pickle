@@ -10,6 +10,8 @@
 
 #include "gpu_mem_util.h"
 
+constexpr uint32_t kGPU1 = 2;
+constexpr uint32_t kGPU2 = 7;
 constexpr uint64_t kDataBufferSize = 75ull * 1024 * 1024 * 1024;
 
 #else
@@ -20,8 +22,6 @@ constexpr uint64_t kDataBufferSize = 1024 * 1024 * 1024;
 
 constexpr const char* kRNIC1 = "mlx5_0";
 constexpr const char* kRNIC2 = "mlx5_5";
-constexpr uint32_t kGPU1 = 2;
-constexpr uint32_t kGPU2 = 7;
 
 int main() {
 #ifdef USE_CUDA

@@ -418,7 +418,6 @@ int RcQueuePair::wait_until_send_completion(
     const int expected_num_wcs,
     std::vector<WorkCompletion>& polled_wcs
 ) noexcept {
-    const int expected = expected_num_wcs;
     ibv_wc* work_completions = new ibv_wc[expected_num_wcs];
     int ret = 0;
     int num_polled_completions = 0;
@@ -453,7 +452,6 @@ int RcQueuePair::wait_until_recv_completion(
     const int expected_num_wcs,
     std::vector<WorkCompletion>& polled_wcs
 ) noexcept {
-    const int expected = expected_num_wcs;
     ibv_wc* work_completions = new ibv_wc[expected_num_wcs];
     int ret = 0;
     int num_polled_completions = 0;
@@ -489,7 +487,6 @@ int RcQueuePair::poll_send_cq_once(const int max_num_wcs, std::vector<WorkComple
         polled_wcs.clear();
     }
 
-    const int expected = max_num_wcs;
     ibv_wc* work_completions = new ibv_wc[max_num_wcs];
 
     int ret = ibv_poll_cq(this->inner->send_cq, max_num_wcs, work_completions);
@@ -515,7 +512,6 @@ int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, std::vector<WorkComple
         polled_wcs.clear();
     }
 
-    const int expected = max_num_wcs;
     ibv_wc* work_completions = new ibv_wc[max_num_wcs];
 
     int ret = ibv_poll_cq(this->inner->recv_cq, max_num_wcs, work_completions);
@@ -541,7 +537,6 @@ int RcQueuePair::poll_send_cq_once(const int max_num_wcs, ibv_wc* wc_buffer, std
         polled_wcs.clear();
     }
 
-    const int expected = max_num_wcs;
     ibv_wc* work_completions = wc_buffer;
 
     int ret = ibv_poll_cq(this->inner->send_cq, max_num_wcs, work_completions);
@@ -566,7 +561,6 @@ int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, ibv_wc* wc_buffer, std
         polled_wcs.clear();
     }
 
-    const int expected = max_num_wcs;
     ibv_wc* work_completions = wc_buffer;
 
     int ret = ibv_poll_cq(this->inner->recv_cq, max_num_wcs, work_completions);

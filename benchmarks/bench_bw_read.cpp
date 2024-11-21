@@ -36,14 +36,14 @@ int main() {
         std::vector<std::thread> threads;
 
         rdma_util::Arc<rdma_util::ProtectionDomain> pd1 =
-            rdma_util::ProtectionDomain::create(std::move(rdma_util::Context::create(kDevice1)));
+            rdma_util::ProtectionDomain::create(rdma_util::Context::create(kDevice1));
         rdma_util::Arc<rdma_util::MemoryRegion> mr1 = rdma_util::MemoryRegion::create(pd1, send_buffer, kBufferSize);
 
         rdma_util::Arc<rdma_util::ProtectionDomain> pd2 =
-            rdma_util::ProtectionDomain::create(std::move(rdma_util::Context::create(kDevice2)));
+            rdma_util::ProtectionDomain::create(rdma_util::Context::create(kDevice2));
         rdma_util::Arc<rdma_util::MemoryRegion> mr2 = rdma_util::MemoryRegion::create(pd2, recv_buffer, kBufferSize);
 
-        for (int i = 0; i < kThreadNum; ++i) {
+        for (uint64_t i = 0; i < kThreadNum; ++i) {
             rdma_util::Arc<rdma_util::RcQueuePair> qp1 = rdma_util::RcQueuePair::create(pd1);
             rdma_util::Arc<rdma_util::RcQueuePair> qp2 = rdma_util::RcQueuePair::create(pd2);
 
@@ -54,7 +54,7 @@ int main() {
             qp_list_2.push_back(qp2);
         }
 
-        for (int i = 0; i < kThreadNum; ++i) {
+        for (uint64_t i = 0; i < kThreadNum; ++i) {
             threads.push_back(std::thread(read_thread, qp_list_1[i], mr1, mr2));
         }
 
@@ -99,7 +99,7 @@ int read_thread(
 
     uint64_t read_posted = 0, read_polled = 0;
 
-    for (int i = 0; i < kSlotNum; ++i) {
+    for (uint64_t i = 0; i < kSlotNum; ++i) {
         qp->post_send_read(i, base_laddr + i * kChunkSize, base_raddr + i * kChunkSize, kChunkSize, lkey, rkey, true);
         read_posted++;
     }
