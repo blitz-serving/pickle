@@ -142,7 +142,7 @@ class RcQueuePair {
 
     HandshakeData get_handshake_data() noexcept(false);
 
-    void bring_up(const HandshakeData& handshake_data) noexcept(false);
+    void bring_up(const HandshakeData& handshake_data, ibv_rate rate = ibv_rate::IBV_RATE_MAX) noexcept(false);
 
     int post_send_send(uint64_t wr_id, uint64_t laddr, uint32_t length, uint32_t lkey, bool signaled) noexcept;
 

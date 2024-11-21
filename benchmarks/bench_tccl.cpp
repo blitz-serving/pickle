@@ -1,3 +1,5 @@
+#include <infiniband/verbs.h>
+
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -11,7 +13,7 @@
 
 #include "gpu_mem_util.h"
 
-constexpr uint32_t kGPU1 = 0;
+constexpr uint32_t kGPU1 = 2;
 constexpr uint32_t kGPU2 = 4;
 constexpr uint64_t kDataBufferSize = 75ull * 1024 * 1024 * 1024;
 
@@ -21,11 +23,12 @@ constexpr uint64_t kDataBufferSize = 40ull * 1024 * 1024 * 1024;
 
 #endif
 
-constexpr const char* kRNIC1 = "mlx5_0";
+constexpr const char* kRNIC1 = "mlx5_1";
 constexpr const char* kRNIC2 = "mlx5_4";
 
 constexpr uint32_t kChunkSize = 256ull * 1024;
 constexpr uint64_t dop = 4096;
+constexpr const ibv_rate kRate = ibv_rate::IBV_RATE_MAX;
 
 static std::atomic<uint64_t> bytes_transferred(0);
 static std::atomic<bool> recver_exited(false);
@@ -94,8 +97,8 @@ int main() {
     auto qp1 = rdma_util::RcQueuePair::create(kRNIC1);
     auto qp2 = rdma_util::RcQueuePair::create(kRNIC2);
 
-    qp1->bring_up(qp2->get_handshake_data());
-    qp2->bring_up(qp1->get_handshake_data());
+    qp1->bring_up(qp2->get_handshake_data(), kRate);
+    qp2->bring_up(qp1->get_handshake_data(), kRate);
 
 #ifdef USE_CUDA
     rdma_util::Arc<rdma_util::MemoryRegion> data_mr1 = rdma_util::MemoryRegion::create(

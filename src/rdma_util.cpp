@@ -158,6 +158,11 @@ QueuePairState RcQueuePair::query_qp_state() noexcept(false) {
 }
 
 HandshakeData RcQueuePair::get_handshake_data() noexcept(false) {
+    ibv_qp_attr attr_ {};
+
+    attr_.ah_attr.static_rate = ibv_rate::IBV_RATE_100_GBPS;
+    ibv_modify_qp(this->inner, &attr_, ibv_qp_attr_mask::IBV_QP_RATE_LIMIT);
+
     ibv_gid gid;
     if (ibv_query_gid(this->context_->inner, 1, 0, &gid)) {
         throw std::runtime_error("Failed to query gid");
@@ -174,7 +179,7 @@ HandshakeData RcQueuePair::get_handshake_data() noexcept(false) {
     return handshake_data;
 }
 
-void RcQueuePair::bring_up(const HandshakeData& handshake_data) noexcept(false) {
+void RcQueuePair::bring_up(const HandshakeData& handshake_data, ibv_rate rate) noexcept(false) {
     ibv_gid gid = handshake_data.gid;
     uint16_t lid = handshake_data.lid;
     uint32_t remote_qp_num = handshake_data.qp_num;
@@ -213,8 +218,8 @@ void RcQueuePair::bring_up(const HandshakeData& handshake_data) noexcept(false) 
 
     {
         // Modify QP to ready-to-receive
-        int mask = ibv_qp_attr_mask::IBV_QP_STATE | ibv_qp_attr_mask::IBV_QP_AV | ibv_qp_attr_mask::IBV_QP_PATH_MTU
-            | ibv_qp_attr_mask::IBV_QP_DEST_QPN | ibv_qp_attr_mask::IBV_QP_RQ_PSN
+        int mask = ibv_qp_attr_mask::IBV_QP_STATE | ibv_qp_attr_mask::IBV_QP_PATH_MTU
+            | ibv_qp_attr_mask::IBV_QP_DEST_QPN | ibv_qp_attr_mask::IBV_QP_AV | ibv_qp_attr_mask::IBV_QP_RQ_PSN
             | ibv_qp_attr_mask::IBV_QP_MAX_DEST_RD_ATOMIC | ibv_qp_attr_mask::IBV_QP_MIN_RNR_TIMER;
         ibv_qp_attr attr {};
         attr.qp_state = ibv_qp_state::IBV_QPS_RTR;
@@ -228,6 +233,7 @@ void RcQueuePair::bring_up(const HandshakeData& handshake_data) noexcept(false) 
         attr.ah_attr.dlid = lid;
         attr.ah_attr.is_global = 1;
         attr.ah_attr.port_num = 1;
+        attr.ah_attr.static_rate = rate;
         attr.max_dest_rd_atomic = 16;
         attr.min_rnr_timer = 0;
 
