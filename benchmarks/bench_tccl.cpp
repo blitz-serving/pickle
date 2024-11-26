@@ -67,7 +67,7 @@ void sender_thread(
         }
     }
 
-    while (bytes_transferred.load() < kDataBufferSize) {
+    while (bytes_transferred.load() < kDataBufferSize / kChunkSize / dop * kChunkSize * dop) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 };
