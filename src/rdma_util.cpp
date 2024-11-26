@@ -688,25 +688,27 @@ TcclContext::TcclContext(Box<RcQueuePair> qp, uint64_t dop) noexcept(false) {
     this->initialize(std::move(qp), dop);
 }
 
-Handle TcclContext::send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey) {
+Handle TcclContext::send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey, uint32_t padding) {
     auto flag = std::make_shared<std::atomic<bool>>(false);
     Ticket ticket {};
     ticket.stream_id = stream_id;
     ticket.addr = addr;
     ticket.length = length;
     ticket.key = lkey;
+    ticket.padding_ = padding;
     Command command = std::make_tuple(ticket, flag);
     this->send_request_command_queue_->enqueue(command);
     return Handle(flag);
 }
 
-Handle TcclContext::recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey) {
+Handle TcclContext::recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey, uint32_t padding) {
     auto flag = std::make_shared<std::atomic<bool>>(false);
     Ticket ticket {};
     ticket.stream_id = stream_id;
     ticket.addr = addr;
     ticket.length = length;
     ticket.key = rkey;
+    ticket.padding_ = padding;
     Command command = std::make_tuple(ticket, flag);
     this->recv_request_command_queue_->enqueue(command);
     return Handle(flag);
@@ -787,7 +789,9 @@ void TcclContext::thread_post_send(
             free_post_send_send_slots.pop();
             pending_local_recv_request_queue.pop();
             memcpy(reinterpret_cast<void*>(buffer_addr + wr_id * chunksize), &ticket, sizeof(Ticket));
-            // printf("post_send_send: wr_id %lu stream_id %u\n", wr_id, ticket.stream_id);
+            if (ticket.padding_ != 0) {
+                printf("post_send_send: %s\n", ticket.to_string().c_str());
+            }
             qp->post_send_send(wr_id, buffer_addr + wr_id * chunksize, chunksize, lkey, true);
             post_send_send_slot_available--;
         }
@@ -814,6 +818,10 @@ void TcclContext::thread_post_send(
                 auto rkey = remote_recv_request.key;
                 auto laddr = local_send_request.addr;
                 auto lkey = local_send_request.key;
+
+                if (remote_recv_request.padding_ != 0) {
+                    printf("post_send_write: %s\n", remote_recv_request.to_string().c_str());
+                }
 
                 qp->post_send_write_with_imm(
                     wr_id,
@@ -917,7 +925,9 @@ void TcclContext::thread_post_recv(
                         // printf("Polled IBV_WC_RECV wc: %s\n", wc.to_string().c_str());
                         Ticket ticket {};
                         memcpy(&ticket, reinterpret_cast<void*>(buffer_addr + wr_id * chunksize), chunksize);
-                        // printf("Polled Ticket: stream_id %u\n", ticket.stream_id);
+                        if (ticket.padding_ != 0) {
+                            printf("recved: %s\n", ticket.to_string().c_str());
+                        }
                         remote_recv_request_queue->enqueue(ticket);
                     }
                     qp->post_recv(wr_id, buffer_addr + wr_id * chunksize, chunksize, host_recv_buffer->get_lkey());

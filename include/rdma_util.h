@@ -5,9 +5,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <ios>
 #include <map>
 #include <memory>
 #include <queue>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -320,10 +322,13 @@ struct Ticket {
     uint32_t length;
     uint64_t addr;
     uint32_t key;
+    uint32_t padding_;
 
     inline std::string to_string() const {
-        return "stream_id: " + std::to_string(stream_id) + ", length: " + std::to_string(length)
-            + ", addr: " + std::to_string(addr) + ", key: " + std::to_string(key);
+        std::stringstream ss;
+        ss << "stream_id: " << stream_id << std::hex << std::uppercase << ", length: " << length << ", addr: " << addr
+           << ", key: " << key << ", padding: " << padding_;
+        return ss.str();
     }
 };
 
@@ -337,7 +342,7 @@ class Handle {
     Arc<std::atomic<bool>> finished_;
 
   public:
-    Handle() = delete;
+    Handle() : finished_(std::make_shared<std::atomic<bool>>(true)) {}
 
     Handle(const Arc<std::atomic<bool>>& finished) : finished_(finished) {}
 
@@ -384,8 +389,8 @@ class TcclContext {
     }
 
     static Arc<TcclContext> create(Box<RcQueuePair> qp, uint64_t dop = 16) noexcept(false);
-    [[nodiscard]] Handle send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
-    [[nodiscard]] Handle recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);
+    [[nodiscard]] Handle send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey, uint32_t padding = 0);
+    [[nodiscard]] Handle recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey, uint32_t padding = 0);
 
   private:
     TcclContext(Box<RcQueuePair> qp, uint64_t dop) noexcept(false);

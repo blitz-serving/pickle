@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <random>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -22,9 +23,16 @@ constexpr uint64_t kDataBufferSize = 40ull * 1024 * 1024 * 1024;
 
 #endif
 
-constexpr uint32_t kChunkSize = 256ull * 1024;
-constexpr uint64_t dop = 4096;
+constexpr const uint64_t KB = 1024ull;
+constexpr const uint64_t MB = 1024ull * KB;
+constexpr const uint64_t GB = 1024ull * MB;
+
+constexpr const uint32_t kChunkSize = 256ull * KB;
+constexpr const uint64_t dop = 4096;
 constexpr const ibv_rate kRate = ibv_rate::IBV_RATE_MAX;
+
+constexpr const uint64_t kSlotCount = kDataBufferSize / kChunkSize;
+constexpr const uint64_t kSendRecvCount = 600 * GB / kChunkSize;
 
 static std::atomic<uint64_t> bytes_transferred(0);
 static std::atomic<uint64_t> exited_recver_count(0);
@@ -54,18 +62,29 @@ void sender_thread(
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t lkey = data_mr->get_lkey();
 
+    std::random_device rd;
+    std::mt19937_64 eng(rd());
+    std::uniform_int_distribution<uint64_t> distr;
+
     while (!started) {
         std::this_thread::yield();
     }
 
-    for (uint64_t i = 0; i < kDataBufferSize / kChunkSize / dop; ++i) {
-        std::vector<rdma_util::Handle> handles;
-        for (uint64_t j = 0; j < dop; ++j) {
-            handles.push_back(context->send(stream_id, base_addr + (i * dop + j) * kChunkSize, kChunkSize, lkey));
+    std::vector<rdma_util::Handle> handles {};
+    handles.reserve(dop);
+
+    for (uint64_t i = 0; i < kSendRecvCount; ++i) {
+        auto slot_idx = distr(eng) % kSlotCount;
+        handles.push_back(context->send(stream_id, base_addr + slot_idx * kChunkSize, kChunkSize, lkey));
+        if (handles.size() == dop) {
+            handles.back().wait();
+            handles.clear();
         }
-        for (const auto& handle : handles) {
-            handle.wait();
-        }
+    }
+
+    if (handles.size() == dop) {
+        handles.back().wait();
+        handles.clear();
     }
 
     while (exited_recver_count.load() < 4) {
@@ -82,20 +101,32 @@ void recver_thread(
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t rkey = data_mr->get_rkey();
 
+    std::random_device rd;
+    std::mt19937_64 eng(rd());
+    std::uniform_int_distribution<uint64_t> distr;
+
     while (!started) {
         std::this_thread::yield();
     }
 
-    for (uint64_t i = 0; i < kDataBufferSize / kChunkSize / dop; ++i) {
-        std::vector<rdma_util::Handle> handles;
-        for (uint64_t j = 0; j < dop; ++j) {
-            handles.push_back(context->recv(stream_id, base_addr + (i * dop + j) * kChunkSize, kChunkSize, rkey));
-        }
-        for (const auto& handle : handles) {
-            handle.wait();
-            bytes_transferred.fetch_add(kChunkSize);
+    std::vector<rdma_util::Handle> handles {};
+    handles.reserve(dop);
+
+    for (uint64_t i = 0; i < kSendRecvCount; ++i) {
+        auto slot_idx = distr(eng) % kSlotCount;
+        handles.push_back(context->recv(stream_id, base_addr + slot_idx * kChunkSize, kChunkSize, rkey));
+        if (handles.size() == dop) {
+            handles.back().wait();
+            bytes_transferred.fetch_add(kChunkSize * dop);
+            handles.clear();
         }
     }
+
+    if (handles.size() == dop) {
+        handles.back().wait();
+        handles.clear();
+    }
+
     exited_recver_count.fetch_add(1);
     printf("Recver exited\n");
 };
