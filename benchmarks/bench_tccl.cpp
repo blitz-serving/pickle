@@ -27,8 +27,8 @@ constexpr uint64_t kDataBufferSize = 40ull * 1024 * 1024 * 1024;
 constexpr const char* kRNIC1 = "mlx5_0";
 constexpr const char* kRNIC2 = "mlx5_0";
 
-constexpr uint32_t kChunkSize = 256ull * 1024;
-constexpr uint64_t dop = 4096;
+constexpr uint32_t kChunkSize = 64ull * 1024;
+constexpr uint64_t dop = 256;
 constexpr const ibv_rate kRate = ibv_rate::IBV_RATE_MAX;
 
 static std::atomic<uint64_t> bytes_transferred(0);

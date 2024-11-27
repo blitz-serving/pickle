@@ -1,4 +1,5 @@
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -13,8 +14,8 @@
 
 #include "gpu_mem_util.h"
 
-constexpr uint32_t kGPU1 = 0;
-constexpr uint32_t kGPU2 = 2;
+constexpr uint32_t kGPU1 = 4;
+constexpr uint32_t kGPU2 = 6;
 constexpr uint64_t kDataBufferSize = 75ull * 1024 * 1024 * 1024;
 
 #else
@@ -23,18 +24,12 @@ constexpr uint64_t kDataBufferSize = 40ull * 1024 * 1024 * 1024;
 
 #endif
 
-constexpr const char* kRNIC1 = "mlx5_0";
-constexpr const char* kRNIC2 = "mlx5_1";
+constexpr const char* kRNIC1 = "mlx5_4";
+constexpr const char* kRNIC2 = "mlx5_5";
 
 constexpr const uint64_t KB = 1024ull;
 constexpr const uint64_t MB = 1024ull * KB;
 constexpr const uint64_t GB = 1024ull * MB;
-
-constexpr const uint32_t kChunkSize = 256ull * KB;
-constexpr const uint64_t dop = 256;
-
-constexpr const uint64_t kSlotCount = kDataBufferSize / kChunkSize;
-constexpr const uint64_t kSendRecvCount = 1024 * GB / kChunkSize;
 
 static std::atomic<uint64_t> bytes_transferred;
 static bool started = false;
@@ -56,10 +51,14 @@ void sender_thread(
     rdma_util::Arc<rdma_util::TcclContext> context,
     rdma_util::Arc<rdma_util::MemoryRegion> data_mr,
     uint32_t stream_id,
+    uint32_t chunk_size,
+    uint32_t dop,
     rdma_util::Arc<std::atomic<uint8_t>> finished
 ) {
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t lkey = data_mr->get_lkey();
+    const uint32_t send_recv_count = 1024 * GB / chunk_size;
+    const uint32_t slot_count = kDataBufferSize / chunk_size;
 
     std::random_device rd;
     std::mt19937_64 eng(rd());
@@ -72,9 +71,9 @@ void sender_thread(
     std::vector<rdma_util::Handle> handles {};
     handles.reserve(dop);
 
-    for (uint64_t i = 0; i < kSendRecvCount; ++i) {
-        auto slot_idx = distr(eng) % kSlotCount;
-        handles.push_back(context->send(stream_id, base_addr + slot_idx * kChunkSize, kChunkSize, lkey));
+    for (uint64_t i = 0; i < send_recv_count; ++i) {
+        auto slot_idx = distr(eng) % slot_count;
+        handles.push_back(context->send(stream_id, base_addr + slot_idx * chunk_size, chunk_size, lkey));
         if (handles.size() == dop) {
             handles.back().wait();
             handles.clear();
@@ -95,10 +94,15 @@ void recver_thread(
     rdma_util::Arc<rdma_util::TcclContext> context,
     rdma_util::Arc<rdma_util::MemoryRegion> data_mr,
     uint32_t stream_id,
+    uint32_t chunk_size,
+    uint32_t dop,
+    std::string name,
     rdma_util::Arc<std::atomic<uint8_t>> finished
 ) {
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t rkey = data_mr->get_rkey();
+    const uint32_t send_recv_count = 1024 * GB / chunk_size;
+    const uint32_t slot_count = kDataBufferSize / chunk_size;
 
     std::random_device rd;
     std::mt19937_64 eng(rd());
@@ -111,13 +115,19 @@ void recver_thread(
     std::vector<rdma_util::Handle> handles {};
     handles.reserve(dop);
 
-    for (uint64_t i = 0; i < kSendRecvCount; ++i) {
-        auto slot_idx = distr(eng) % kSlotCount;
-        handles.push_back(context->recv(stream_id, base_addr + slot_idx * kChunkSize, kChunkSize, rkey));
+    auto s_time = std::chrono::high_resolution_clock::now();
+    for (uint64_t i = 0; i < send_recv_count; ++i) {
+        auto slot_idx = distr(eng) % slot_count;
+        handles.push_back(context->recv(stream_id, base_addr + slot_idx * chunk_size, chunk_size, rkey));
         if (handles.size() == dop) {
             handles.back().wait();
-            bytes_transferred.fetch_add(kChunkSize * dop);
+            auto e_time = std::chrono::high_resolution_clock::now();
+            double bandwidth = chunk_size * dop / 1024.0 / 1024.0 / 1024.0
+                / std::chrono::duration_cast<std::chrono::microseconds>(e_time - s_time).count() * 1000000.0;
+            printf("[%s] Stream %d Bandwidth: %.2f GB/s\n", name.c_str(), stream_id, bandwidth);
+            bytes_transferred.fetch_add(chunk_size * dop);
             handles.clear();
+            s_time = std::chrono::high_resolution_clock::now();
         }
     }
 
@@ -172,11 +182,12 @@ int main() {
     auto finished = std::shared_ptr<std::atomic<uint8_t>>(new std::atomic<uint8_t>(0));
 
     std::thread reporter(reporter_thread, finished);
-    std::thread sender1(sender_thread, context1, data_mr1, 0, finished);
-    std::thread recver1(recver_thread, context2, data_mr2, 0, finished);
 
-    std::thread sender2(sender_thread, context2, data_mr2, 0, finished);
-    std::thread recver2(recver_thread, context1, data_mr1, 0, finished);
+    std::thread sender0(sender_thread, context1, data_mr1, 1, 256 * KB, 64, finished);
+    std::thread recver0(recver_thread, context2, data_mr2, 1, 256 * KB, 64, "recver0", finished);
+
+    std::thread sender1(sender_thread, context2, data_mr2, 0, 64 * KB, 64, finished);
+    std::thread recver1(recver_thread, context1, data_mr1, 0, 64 * KB, 64, "recver1", finished);
 
     std::vector<std::thread> polling_threads {};
     polling_threads.push_back(std::thread([context1, context2, finished] {
@@ -189,10 +200,10 @@ int main() {
     started = true;
 
     reporter.join();
+    sender0.join();
     sender1.join();
-    sender2.join();
+    recver0.join();
     recver1.join();
-    recver2.join();
 
     for (auto& thread : polling_threads) {
         thread.join();
