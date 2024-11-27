@@ -4,10 +4,13 @@
 #include <infiniband/verbs.h>
 
 #include <atomic>
+#include <cassert>
 #include <cstdint>
+#include <ios>
 #include <map>
 #include <memory>
 #include <queue>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -313,17 +316,20 @@ class MemoryRegion {
 };
 
 template<typename T>
-using Queue = Arc<moodycamel::ConcurrentQueue<T>>;
+using Queue = moodycamel::ConcurrentQueue<T>;
 
 struct Ticket {
     uint32_t stream_id;
     uint32_t length;
     uint64_t addr;
     uint32_t key;
+    uint32_t padding_;
 
     inline std::string to_string() const {
-        return "stream_id: " + std::to_string(stream_id) + ", length: " + std::to_string(length)
-            + ", addr: " + std::to_string(addr) + ", key: " + std::to_string(key);
+        std::stringstream ss;
+        ss << "stream_id: " << stream_id << std::hex << std::uppercase << ", length: " << length << ", addr: " << addr
+           << ", key: " << key << ", padding: " << padding_;
+        return ss.str();
     }
 };
 
@@ -337,7 +343,7 @@ class Handle {
     Arc<std::atomic<bool>> finished_;
 
   public:
-    Handle() = delete;
+    Handle() : finished_(std::make_shared<std::atomic<bool>>(true)) {}
 
     Handle(const Arc<std::atomic<bool>>& finished) : finished_(finished) {}
 
@@ -360,55 +366,98 @@ class Handle {
 
 class TcclContext {
   private:
+    uint64_t dop_;
+
+    Arc<RcQueuePair> qp_;
+
+    std::vector<ibv_wc> send_ibv_wc_buffer_;
+    std::vector<WorkCompletion> polled_send_wcs_;
+
+    std::vector<ibv_wc> recv_ibv_wc_buffer_;
+    std::vector<WorkCompletion> polled_recv_wcs_;
+
     Queue<Command> send_request_command_queue_;
     Queue<Command> recv_request_command_queue_;
 
-    uint64_t dop_;
+    Box<MemoryRegion> host_send_buffer_;
+    uint64_t send_buffer_addr_;
+    uint32_t send_buffer_lkey_;
 
-    // Backgound worker threads
-    std::thread thread_post_send_;
-    std::thread thread_post_recv_;
+    Box<MemoryRegion> host_recv_buffer_;
+    uint64_t recv_buffer_addr_;
+    uint32_t recv_buffer_lkey_;
 
-    Arc<std::atomic<bool>> finalized_;
+    Queue<Ticket> local_recv_request_queue_;
+    Queue<Ticket> remote_recv_request_queue_;
 
-    TcclContext() = delete;
+    // Used in send_one_round
+    std::queue<Ticket> pending_local_recv_request_queue_;
+    MultiMap<Ticket> pending_remote_recv_request_map_;
+    MultiMap<Ticket> pending_local_send_request_map_;
+    MultiMap<rdma_util::Arc<std::atomic<bool>>> pending_local_send_flag_map_;
+    std::queue<uint64_t> free_post_send_send_slots_;
+    uint64_t post_send_write_slot_available_;
+    uint64_t post_send_send_slot_available_;
+
+    // Used in recv_one_round
+    uint64_t pending_recv_request_count_;
+    MultiMap<rdma_util::Arc<std::atomic<bool>>> pending_local_recv_request_map_;
+
+    // Background polling
+    bool background_polling_;
+    std::thread polling_thread_;
+    std::atomic<bool> polling_stopped_;
+
     TcclContext(const TcclContext&) = delete;
     TcclContext& operator=(const TcclContext&) = delete;
+
+    void poll_both_inner() noexcept(false);
+    void poll_send_one_round_inner() noexcept(false);
+    void poll_recv_one_round_inner() noexcept(false);
 
   public:
     ~TcclContext();
 
-  public:
     inline uint64_t get_dop() const {
         return this->dop_;
     }
 
-    static Arc<TcclContext> create(Box<RcQueuePair> qp, uint64_t dop = 16) noexcept(false);
-    [[nodiscard]] Handle send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
-    [[nodiscard]] Handle recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);
+    /**
+     * @brief Poll both send and recv tasks
+     * SAFETY: !! This function is not thread-safe !!
+     */
+    inline void poll_both() noexcept(false) {
+        assert(this->background_polling_ == false);
+        this->poll_recv_one_round_inner();
+        this->poll_send_one_round_inner();
+    }
+
+    /**
+     * @brief Poll send tasks
+     * SAFETY: !! This function is not thread-safe !!
+     */
+    inline void poll_send_one_round() noexcept(false) {
+        assert(this->background_polling_ == false);
+        this->poll_send_one_round_inner();
+    }
+
+    /**
+     * @brief Poll recv tasks
+     * SAFETY: !! This function is not thread-safe !!
+     */
+    inline void poll_recv_one_round() noexcept(false) {
+        assert(this->background_polling_ == false);
+        this->poll_recv_one_round_inner();
+    }
+
+    static Arc<TcclContext>
+    create(Box<RcQueuePair> qp, bool spawn_polling_thread = true, uint64_t dop = 16) noexcept(false);
+    [[nodiscard]] Handle send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey, uint32_t padding = 0);
+    [[nodiscard]] Handle recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey, uint32_t padding = 0);
 
   private:
-    TcclContext(Box<RcQueuePair> qp, uint64_t dop) noexcept(false);
-
+    TcclContext() = default;
     void initialize(Box<RcQueuePair> qp, uint64_t dop) noexcept(false);
-
-    static void thread_post_send(
-        Arc<RcQueuePair> qp,
-        uint64_t dop,
-        Arc<std::atomic<bool>> finalized,
-        Queue<Command> send_command_queue,
-        Queue<Ticket> local_recv_request_queue,
-        Queue<Ticket> remote_recv_request_queue
-    ) noexcept(false);
-
-    static void thread_post_recv(
-        Arc<RcQueuePair> qp,
-        uint64_t dop,
-        Arc<std::atomic<bool>> finalized,
-        Queue<Command> recv_command_queue,
-        Queue<Ticket> local_recv_request_queue,
-        Queue<Ticket> remote_recv_request_queue
-    ) noexcept(false);
 };
 
 }  // namespace rdma_util

@@ -10,7 +10,7 @@
 
 #include "gpu_mem_util.h"
 
-constexpr uint32_t kGPU1 = 2;
+constexpr uint32_t kGPU1 = 4;
 constexpr uint32_t kGPU2 = 7;
 constexpr uint64_t kDataBufferSize = 75ull * 1024 * 1024 * 1024;
 
@@ -20,8 +20,10 @@ constexpr uint64_t kDataBufferSize = 1024 * 1024 * 1024;
 
 #endif
 
-constexpr const char* kRNIC1 = "mlx5_0";
+constexpr const char* kRNIC1 = "mlx5_4";
 constexpr const char* kRNIC2 = "mlx5_5";
+
+static bool stopped = false;
 
 int main() {
 #ifdef USE_CUDA
@@ -43,10 +45,17 @@ int main() {
 
     printf("created data mr\n");
 
-    auto context1 = rdma_util::TcclContext::create(std::move(qp1));
-    auto context2 = rdma_util::TcclContext::create(std::move(qp2));
+    auto context1 = rdma_util::TcclContext::create(std::move(qp1), false);
+    auto context2 = rdma_util::TcclContext::create(std::move(qp2), false);
 
     printf("created tccl context\n");
+
+    std::thread polling_thread([context1, context2]() {
+        while (!stopped) {
+            context1->poll_both();
+            context2->poll_both();
+        }
+    });
 
     std::vector<rdma_util::Handle> handles;
 
@@ -81,5 +90,7 @@ int main() {
     free(data_buffer2);
 #endif
 
+    stopped = true;
+    polling_thread.join();
     return 0;
 }

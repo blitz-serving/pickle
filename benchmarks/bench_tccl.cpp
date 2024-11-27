@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -13,8 +14,8 @@
 
 #include "gpu_mem_util.h"
 
-constexpr uint32_t kGPU1 = 2;
-constexpr uint32_t kGPU2 = 4;
+constexpr uint32_t kGPU1 = 0;
+constexpr uint32_t kGPU2 = 1;
 constexpr uint64_t kDataBufferSize = 75ull * 1024 * 1024 * 1024;
 
 #else
@@ -23,8 +24,8 @@ constexpr uint64_t kDataBufferSize = 40ull * 1024 * 1024 * 1024;
 
 #endif
 
-constexpr const char* kRNIC1 = "mlx5_1";
-constexpr const char* kRNIC2 = "mlx5_4";
+constexpr const char* kRNIC1 = "mlx5_0";
+constexpr const char* kRNIC2 = "mlx5_0";
 
 constexpr uint32_t kChunkSize = 256ull * 1024;
 constexpr uint64_t dop = 4096;
@@ -130,13 +131,22 @@ int main() {
     );
 #endif
 
-    auto context1 = rdma_util::TcclContext::create(std::move(qp1));
-    auto context2 = rdma_util::TcclContext::create(std::move(qp2));
+    auto context1 = rdma_util::TcclContext::create(std::move(qp1), false);
+    auto context2 = rdma_util::TcclContext::create(std::move(qp2), false);
 
     std::thread reporter(reporter_thread);
     std::thread sender(sender_thread, context1, data_mr1, 0);
     std::thread recver(recver_thread, context2, data_mr2, 0);
 
+    std::thread([context1, context2] {
+        while (1) {
+            context1->poll_both();
+            context2->poll_both();
+            if (recver_exited.load()) {
+                return;
+            }
+        }
+    }).join();
     reporter.join();
     sender.join();
     recver.join();
