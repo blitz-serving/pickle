@@ -11,12 +11,9 @@
 #include <memory>
 #include <queue>
 #include <stdexcept>
-#include <thread>
 #include <tuple>
 #include <utility>
 #include <vector>
-
-#include "concurrentqueue.h"
 
 namespace rdma_util {
 
@@ -643,49 +640,89 @@ Box<MemoryRegion> MemoryRegion::create(rdma_util::Arc<ProtectionDomain> pd, void
     return Box<MemoryRegion>(new MemoryRegion(pd, addr, length));
 }
 
-rdma_util::Arc<TcclContext> TcclContext::create(Box<RcQueuePair> qp, uint64_t dop) noexcept(false) {
-    return rdma_util::Arc<TcclContext>(new TcclContext(std::move(qp), dop));
+rdma_util::Arc<TcclContext>
+TcclContext::create(Box<RcQueuePair> qp, bool spawn_polling_thread, uint64_t dop) noexcept(false) {
+    Arc<TcclContext> tccl_context = Arc<TcclContext>(new TcclContext());
+    tccl_context->initialize(std::move(qp), dop);
+    if (spawn_polling_thread) {
+        tccl_context->background_polling_ = true;
+        tccl_context->polling_stopped_.store(false);
+        tccl_context->polling_thread_ = std::thread([tccl_context]() {
+            while (!tccl_context->polling_stopped_.load(std::memory_order_relaxed)) {
+                tccl_context->poll_both_inner();
+            }
+        });
+    } else {
+        tccl_context->background_polling_ = false;
+        tccl_context->polling_stopped_.store(true);
+    }
+    return tccl_context;
+}
+
+TcclContext::~TcclContext() {
+    if (this->background_polling_) {
+        this->polling_stopped_.store(true);
+        this->polling_thread_.join();
+    }
 }
 
 void TcclContext::initialize(Box<RcQueuePair> qp, uint64_t dop) noexcept(false) {
-    rdma_util::Arc<std::atomic<bool>> finalized = std::make_shared<std::atomic<bool>>(false);
-    auto local_recv_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
-    auto remote_recv_request_queue = Queue<Ticket>(new moodycamel::ConcurrentQueue<Ticket>());
-    auto recv_command_queue = Queue<Command>(new moodycamel::ConcurrentQueue<Command>());
-    auto send_command_queue = Queue<Command>(new moodycamel::ConcurrentQueue<Command>());
-
-    rdma_util::Arc<RcQueuePair> shared_qp = std::move(qp);
-
-    std::thread t1(
-        thread_post_send,
-        shared_qp,
-        dop,
-        finalized,
-        send_command_queue,
-        local_recv_request_queue,
-        remote_recv_request_queue
-    );
-
-    std::thread t2(
-        thread_post_recv,
-        shared_qp,
-        dop,
-        finalized,
-        recv_command_queue,
-        local_recv_request_queue,
-        remote_recv_request_queue
-    );
-
-    this->thread_post_send_ = std::move(t1);
-    this->thread_post_recv_ = std::move(t2);
-    this->recv_request_command_queue_ = std::move(recv_command_queue);
-    this->send_request_command_queue_ = std::move(send_command_queue);
-    this->finalized_ = finalized;
     this->dop_ = dop;
-}
 
-TcclContext::TcclContext(Box<RcQueuePair> qp, uint64_t dop) noexcept(false) {
-    this->initialize(std::move(qp), dop);
+    this->qp_ = std::move(qp);
+
+    this->send_ibv_wc_buffer_ = std::vector<ibv_wc>(2 * dop);
+    this->polled_send_wcs_ = std::vector<WorkCompletion>();
+    this->polled_send_wcs_.reserve(2 * this->dop_);
+
+    this->recv_ibv_wc_buffer_ = std::vector<ibv_wc>(2 * dop);
+    this->polled_recv_wcs_ = std::vector<WorkCompletion>();
+    this->polled_recv_wcs_.reserve(2 * this->dop_);
+
+    this->recv_request_command_queue_ = Queue<Command>();
+    this->send_request_command_queue_ = Queue<Command>();
+
+    this->host_send_buffer_ = MemoryRegion::create(
+        this->qp_->get_pd(),
+        rdma_util::Arc<void>(new Ticket[dop], [](Ticket* p) { delete[] p; }),
+        sizeof(Ticket) * this->dop_
+    );
+    this->send_buffer_addr_ = uint64_t(this->host_send_buffer_->get_addr());
+    this->send_buffer_lkey_ = this->host_send_buffer_->get_lkey();
+
+    this->host_recv_buffer_ = MemoryRegion::create(
+        this->qp_->get_pd(),
+        rdma_util::Arc<void>(new Ticket[2 * dop], [](Ticket* p) { delete[] p; }),
+        sizeof(Ticket) * 2 * this->dop_
+    );
+    this->recv_buffer_addr_ = uint64_t(this->host_recv_buffer_->get_addr());
+    this->recv_buffer_lkey_ = this->host_recv_buffer_->get_lkey();
+
+    this->local_recv_request_queue_ = Queue<Ticket>();
+    this->remote_recv_request_queue_ = Queue<Ticket>();
+
+    this->pending_local_recv_request_queue_ = std::queue<Ticket>();
+    this->pending_remote_recv_request_map_ = MultiMap<Ticket>();
+    this->pending_local_send_request_map_ = MultiMap<Ticket>();
+    this->pending_local_send_flag_map_ = MultiMap<rdma_util::Arc<std::atomic<bool>>>();
+
+    this->free_post_send_send_slots_ = std::queue<uint64_t>();
+    this->post_send_write_slot_available_ = this->dop_;
+    this->post_send_send_slot_available_ = this->dop_;
+    for (uint64_t wr_id = 0; wr_id < dop; ++wr_id) {
+        this->free_post_send_send_slots_.push(wr_id);
+    }
+
+    this->pending_recv_request_count_ = 0;
+    this->pending_local_recv_request_map_ = MultiMap<rdma_util::Arc<std::atomic<bool>>>();
+    for (uint64_t wr_id = 0; wr_id < 2 * dop; ++wr_id) {
+        this->qp_->post_recv(
+            wr_id,
+            this->recv_buffer_addr_ + wr_id * sizeof(Ticket),
+            sizeof(Ticket),
+            this->recv_buffer_lkey_
+        );
+    }
 }
 
 Handle TcclContext::send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey, uint32_t padding) {
@@ -697,7 +734,7 @@ Handle TcclContext::send(uint32_t stream_id, uint64_t addr, uint32_t length, uin
     ticket.key = lkey;
     ticket.padding_ = padding;
     Command command = std::make_tuple(ticket, flag);
-    this->send_request_command_queue_->enqueue(command);
+    this->send_request_command_queue_.enqueue(command);
     return Handle(flag);
 }
 
@@ -710,241 +747,171 @@ Handle TcclContext::recv(uint32_t stream_id, uint64_t addr, uint32_t length, uin
     ticket.key = rkey;
     ticket.padding_ = padding;
     Command command = std::make_tuple(ticket, flag);
-    this->recv_request_command_queue_->enqueue(command);
+    this->recv_request_command_queue_.enqueue(command);
     return Handle(flag);
 }
 
-// local_send_request_queue is received from Send Request like NcclSend
-// local_recv_request_queue is received from Recv Request like NcclRecv
-// remote_recv_request_queue is received from remote side sender.
-void TcclContext::thread_post_send(
-    rdma_util::Arc<RcQueuePair> qp,
-    uint64_t dop,
-    rdma_util::Arc<std::atomic<bool>> finalized,
-    Queue<Command> send_command_queue,
-    Queue<Ticket> local_recv_request_queue,
-    Queue<Ticket> remote_recv_request_queue
-) noexcept(false) {
-    auto host_send_buffer = MemoryRegion::create(
-        qp->get_pd(),
-        rdma_util::Arc<void>(new Ticket[dop], [](Ticket* p) { delete[] p; }),
-        sizeof(Ticket) * dop
-    );
+void TcclContext::poll_both_inner() noexcept(false) {
+    this->poll_recv_one_round_inner();
+    this->poll_send_one_round_inner();
+}
 
-    constexpr uint64_t chunksize = uint64_t(sizeof(Ticket));
-    const uint64_t buffer_addr = uint64_t(host_send_buffer->get_addr());
-    const uint32_t lkey = host_send_buffer->get_lkey();
+void TcclContext::poll_send_one_round_inner() noexcept(false) {
+    ASSERT(this->send_ibv_wc_buffer_.size() > 0, "WC buffer is empty");
 
-    std::queue<Ticket> pending_local_recv_request_queue;
-    MultiMap<Ticket> pending_remote_recv_request_map;
+    std::vector<Command> commands(this->dop_);
+    std::vector<Ticket> tickets(this->dop_);
 
-    MultiMap<Ticket> pending_local_send_request_map;
-    MultiMap<rdma_util::Arc<std::atomic<bool>>> pending_local_send_flag_map;
-
-    std::vector<WorkCompletion> polled_send_wcs;
-    polled_send_wcs.reserve(2 * dop);
-    ibv_wc* wc_buffer = new ibv_wc[2 * dop];
-
-    Ticket tickets[16];
-    std::vector<Command> commands(dop);
     uint64_t count_dequeued = 0;
 
-    std::queue<uint64_t> free_post_send_send_slots;
-
-    uint64_t post_send_write_slot_available = dop;
-    uint64_t post_send_send_slot_available = dop;
-
-    for (uint64_t wr_id = 0; wr_id < dop; ++wr_id) {
-        free_post_send_send_slots.push(wr_id);
-    }
-
-    while (!finalized->load(std::memory_order_relaxed)) {
-        // Received from send request
-        if (post_send_send_slot_available > 0) {
-            count_dequeued = send_command_queue->try_dequeue_bulk(commands.begin(), dop);
-            for (uint64_t i = 0; i < count_dequeued; ++i) {
-                auto ticket = std::get<0>(commands[i]);
-                auto flag = std::get<1>(commands[i]);
-                pending_local_send_request_map[ticket.stream_id].push(ticket);
-                pending_local_send_flag_map[ticket.stream_id].push(flag);
-            }
-        }
-
-        // Received from recv request
-        count_dequeued = local_recv_request_queue->try_dequeue_bulk(tickets, 16);
+    // Received from send request
+    if (this->post_send_send_slot_available_ > 0) {
+        count_dequeued = this->send_request_command_queue_.try_dequeue_bulk(commands.begin(), this->dop_);
         for (uint64_t i = 0; i < count_dequeued; ++i) {
-            pending_local_recv_request_queue.push(tickets[i]);
-        }
-
-        // Received from thread_post_recv
-        count_dequeued = remote_recv_request_queue->try_dequeue_bulk(tickets, 16);
-        for (uint64_t i = 0; i < count_dequeued; ++i) {
-            pending_remote_recv_request_map[tickets[i].stream_id].push(tickets[i]);
-        }
-
-        // Send local write args to remote side
-        while (post_send_send_slot_available > 0 && !pending_local_recv_request_queue.empty()) {
-            uint64_t wr_id = free_post_send_send_slots.front();
-            Ticket ticket = pending_local_recv_request_queue.front();
-            free_post_send_send_slots.pop();
-            pending_local_recv_request_queue.pop();
-            memcpy(reinterpret_cast<void*>(buffer_addr + wr_id * chunksize), &ticket, sizeof(Ticket));
-            if (ticket.padding_ != 0) {
-                printf("post_send_send: %s\n", ticket.to_string().c_str());
-            }
-            qp->post_send_send(wr_id, buffer_addr + wr_id * chunksize, chunksize, lkey, true);
-            post_send_send_slot_available--;
-        }
-
-        // Execute remote write args
-        for (auto& item : pending_remote_recv_request_map) {
-            uint32_t stream_id = item.first;
-            std::queue<Ticket>& pending_remote_recv_request_queue = item.second;
-            if (post_send_write_slot_available == 0) {
-                break;
-            } else if (!pending_remote_recv_request_queue.empty()
-                       && !pending_local_send_request_map[stream_id].empty()) {
-                auto remote_recv_request = pending_remote_recv_request_queue.front();
-                auto local_send_request = pending_local_send_request_map[stream_id].front();
-                pending_remote_recv_request_queue.pop();
-                pending_local_send_request_map[stream_id].pop();
-
-                if (local_send_request.length != remote_recv_request.length) {
-                    throw std::runtime_error("Length mismatch");
-                }
-
-                auto wr_id = stream_id;
-                auto raddr = remote_recv_request.addr;
-                auto rkey = remote_recv_request.key;
-                auto laddr = local_send_request.addr;
-                auto lkey = local_send_request.key;
-
-                if (remote_recv_request.padding_ != 0) {
-                    printf("post_send_write: %s\n", remote_recv_request.to_string().c_str());
-                }
-
-                qp->post_send_write_with_imm(
-                    wr_id,
-                    laddr,
-                    raddr,
-                    local_send_request.length,
-                    stream_id,
-                    lkey,
-                    rkey,
-                    true
-                );
-                post_send_write_slot_available--;
-            }
-        }
-
-        int ret = qp->poll_send_cq_once(2 * dop, wc_buffer, polled_send_wcs);
-
-        if (ret < 0) {
-            throw std::runtime_error("Failed to poll send CQ");
-        } else if (ret > 0) {
-            for (const auto& wc : polled_send_wcs) {
-                if (wc.status != IBV_WC_SUCCESS) {
-                    // printf("Failed wc: %s\n", wc.to_string().c_str());
-                    throw std::runtime_error("Failed to send data");
-                } else if (wc.opcode == IBV_WC_SEND) {
-                    // printf("Polled IBV_WC_SEND wc: %s\n", wc.to_string().c_str());
-                    free_post_send_send_slots.push(wc.wr_id);
-                    post_send_send_slot_available++;
-                } else if (wc.opcode == IBV_WC_RDMA_WRITE) {
-                    // printf("Polled IBV_WC_RDMA_WRITE wc: %s\n", wc.to_string().c_str());
-                    pending_local_send_flag_map[wc.wr_id].front()->store(true);
-                    pending_local_send_flag_map[wc.wr_id].pop();
-                    post_send_write_slot_available++;
-                }
-            }
+            auto ticket = std::get<0>(commands[i]);
+            auto flag = std::get<1>(commands[i]);
+            this->pending_local_send_request_map_[ticket.stream_id].push(ticket);
+            this->pending_local_send_flag_map_[ticket.stream_id].push(flag);
         }
     }
 
-    delete[] wc_buffer;
-}
+    // Received from recv request
+    count_dequeued = this->local_recv_request_queue_.try_dequeue_bulk(tickets.begin(), this->dop_);
+    for (uint64_t i = 0; i < count_dequeued; ++i) {
+        this->pending_local_recv_request_queue_.push(tickets[i]);
+    }
 
-void TcclContext::thread_post_recv(
-    rdma_util::Arc<RcQueuePair> qp,
-    uint64_t dop,
-    rdma_util::Arc<std::atomic<bool>> finalized,
-    Queue<Command> recv_command_queue,
-    Queue<Ticket> local_recv_request_queue,
-    Queue<Ticket> remote_recv_request_queue
-) noexcept(false) {
-    auto host_recv_buffer = MemoryRegion::create(
-        qp->get_pd(),
-        rdma_util::Arc<void>(new Ticket[2 * dop], [](Ticket* p) { delete[] p; }),
-        sizeof(Ticket) * 2 * dop
+    // Received from thread_post_recv
+    count_dequeued = this->remote_recv_request_queue_.try_dequeue_bulk(tickets.begin(), this->dop_);
+    for (uint64_t i = 0; i < count_dequeued; ++i) {
+        this->pending_remote_recv_request_map_[tickets[i].stream_id].push(tickets[i]);
+    }
+
+    // Send local write args to remote side
+    while (this->post_send_send_slot_available_ > 0 && !this->pending_local_recv_request_queue_.empty()) {
+        uint64_t wr_id = this->free_post_send_send_slots_.front();
+        Ticket ticket = this->pending_local_recv_request_queue_.front();
+        this->free_post_send_send_slots_.pop();
+        this->pending_local_recv_request_queue_.pop();
+        memcpy(reinterpret_cast<void*>(this->send_buffer_addr_ + wr_id * sizeof(Ticket)), &ticket, sizeof(Ticket));
+
+        this->qp_->post_send_send(
+            wr_id,
+            this->send_buffer_addr_ + wr_id * sizeof(Ticket),
+            sizeof(Ticket),
+            this->send_buffer_lkey_,
+            true
+        );
+        this->post_send_send_slot_available_--;
+    }
+
+    // Execute remote write args
+    for (auto& item : this->pending_remote_recv_request_map_) {
+        uint32_t stream_id = item.first;
+        std::queue<Ticket>& pending_remote_recv_request_queue = item.second;
+        if (this->post_send_write_slot_available_ == 0) {
+            break;
+        } else if (!pending_remote_recv_request_queue.empty()
+                   && !this->pending_local_send_request_map_[stream_id].empty()) {
+            auto remote_recv_request = pending_remote_recv_request_queue.front();
+            auto local_send_request = this->pending_local_send_request_map_[stream_id].front();
+            pending_remote_recv_request_queue.pop();
+            this->pending_local_send_request_map_[stream_id].pop();
+
+            if (local_send_request.length != remote_recv_request.length) {
+                throw std::runtime_error("Length mismatch");
+            }
+
+            auto wr_id = stream_id;
+            auto raddr = remote_recv_request.addr;
+            auto rkey = remote_recv_request.key;
+            auto laddr = local_send_request.addr;
+            auto lkey = local_send_request.key;
+
+            this->qp_
+                ->post_send_write_with_imm(wr_id, laddr, raddr, local_send_request.length, stream_id, lkey, rkey, true);
+            this->post_send_write_slot_available_--;
+        }
+    }
+
+    int ret = this->qp_->poll_send_cq_once(
+        this->send_ibv_wc_buffer_.size(),
+        this->send_ibv_wc_buffer_.data(),
+        this->polled_send_wcs_
     );
 
-    constexpr uint64_t chunksize = uint64_t(sizeof(Ticket));
-    const uint64_t buffer_addr = uint64_t(host_recv_buffer->get_addr());
-    const uint32_t lkey = host_recv_buffer->get_lkey();
-
-    for (uint64_t wr_id = 0; wr_id < 2 * dop; ++wr_id) {
-        qp->post_recv(wr_id, buffer_addr + wr_id * chunksize, chunksize, lkey);
-    }
-
-    std::vector<WorkCompletion> polled_recv_wcs;
-    polled_recv_wcs.reserve(2 * dop);
-
-    ibv_wc* wc_buffer = new ibv_wc[2 * dop];
-
-    std::vector<Command> commands(dop);
-    std::vector<Ticket> tickets(dop);
-
-    MultiMap<rdma_util::Arc<std::atomic<bool>>> pending_local_recv_request_map;
-    uint64_t pending_recv_request_count = 0;
-
-    while (!finalized->load(std::memory_order_relaxed)) {
-        if (pending_recv_request_count < 2 * dop) {
-            const uint64_t dequeued_count = recv_command_queue->try_dequeue_bulk(commands.begin(), dop);
-            for (uint64_t i = 0; i < dequeued_count; ++i) {
-                tickets[i] = std::get<0>(commands[i]);
-                pending_local_recv_request_map[tickets[i].stream_id].push(std::get<1>(commands[i]));
-                pending_recv_request_count++;
+    if (ret < 0) {
+        throw std::runtime_error("Failed to poll send CQ");
+    } else if (ret > 0) {
+        for (const auto& wc : this->polled_send_wcs_) {
+            if (wc.status != IBV_WC_SUCCESS) {
+                throw std::runtime_error("Failed to send data");
+            } else if (wc.opcode == IBV_WC_SEND) {
+                this->free_post_send_send_slots_.push(wc.wr_id);
+                this->post_send_send_slot_available_++;
+            } else if (wc.opcode == IBV_WC_RDMA_WRITE) {
+                this->pending_local_send_flag_map_[wc.wr_id].front()->store(true);
+                this->pending_local_send_flag_map_[wc.wr_id].pop();
+                this->post_send_write_slot_available_++;
             }
-            local_recv_request_queue->enqueue_bulk(tickets.begin(), dequeued_count);
-        }
-
-        int ret = qp->poll_recv_cq_once(2 * dop, wc_buffer, polled_recv_wcs);
-        if (ret > 0) {
-            for (const auto& wc : polled_recv_wcs) {
-                if (wc.status != IBV_WC_SUCCESS) {
-                    throw std::runtime_error("Failed to receive data");
-                } else {
-                    auto wr_id = wc.wr_id;
-                    if (wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
-                        // printf("Polled IBV_WC_RECV_RDMA_WITH_IMM wc: %s\n", wc.to_string().c_str());
-                        std::queue<rdma_util::Arc<std::atomic<bool>>>& queue =
-                            pending_local_recv_request_map[wc.imm_data];
-                        queue.front()->store(1);
-                        queue.pop();
-                        pending_recv_request_count--;
-                    } else {
-                        // printf("Polled IBV_WC_RECV wc: %s\n", wc.to_string().c_str());
-                        Ticket ticket {};
-                        memcpy(&ticket, reinterpret_cast<void*>(buffer_addr + wr_id * chunksize), chunksize);
-                        if (ticket.padding_ != 0) {
-                            printf("recved: %s\n", ticket.to_string().c_str());
-                        }
-                        remote_recv_request_queue->enqueue(ticket);
-                    }
-                    qp->post_recv(wr_id, buffer_addr + wr_id * chunksize, chunksize, host_recv_buffer->get_lkey());
-                }
-            }
-        } else if (ret < 0) {
-            throw std::runtime_error("Failed to poll recv CQ");
         }
     }
-
-    delete[] wc_buffer;
 }
 
-TcclContext::~TcclContext() {
-    this->finalized_->store(true);
-    this->thread_post_send_.join();
-    this->thread_post_recv_.join();
+void TcclContext::poll_recv_one_round_inner() noexcept(false) {
+    ASSERT(this->recv_ibv_wc_buffer_.size() > 0, "WC buffer is empty");
+
+    std::vector<Command> commands(this->dop_);
+    std::vector<Ticket> tickets(this->dop_);
+
+    if (this->pending_recv_request_count_ < 2 * this->dop_) {
+        const uint64_t dequeued_count =
+            this->recv_request_command_queue_.try_dequeue_bulk(commands.begin(), this->dop_);
+        for (uint64_t i = 0; i < dequeued_count; ++i) {
+            tickets[i] = std::get<0>(commands[i]);
+            this->pending_local_recv_request_map_[tickets[i].stream_id].push(std::get<1>(commands[i]));
+            this->pending_recv_request_count_++;
+        }
+        this->local_recv_request_queue_.enqueue_bulk(tickets.begin(), dequeued_count);
+    }
+
+    int ret = this->qp_->poll_recv_cq_once(
+        this->recv_ibv_wc_buffer_.size(),
+        this->recv_ibv_wc_buffer_.data(),
+        this->polled_recv_wcs_
+    );
+    if (ret > 0) {
+        for (const auto& wc : this->polled_recv_wcs_) {
+            if (wc.status != IBV_WC_SUCCESS) {
+                throw std::runtime_error("Failed to receive data");
+            } else {
+                auto wr_id = wc.wr_id;
+                if (wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+                    std::queue<rdma_util::Arc<std::atomic<bool>>>& queue =
+                        this->pending_local_recv_request_map_[wc.imm_data];
+                    queue.front()->store(1);
+                    queue.pop();
+                    this->pending_recv_request_count_--;
+                } else {
+                    Ticket ticket {};
+                    memcpy(
+                        &ticket,
+                        reinterpret_cast<void*>(this->recv_buffer_addr_ + wr_id * sizeof(Ticket)),
+                        sizeof(Ticket)
+                    );
+                    this->remote_recv_request_queue_.enqueue(ticket);
+                }
+                this->qp_->post_recv(
+                    wr_id,
+                    this->recv_buffer_addr_ + wr_id * sizeof(Ticket),
+                    sizeof(Ticket),
+                    this->recv_buffer_lkey_
+                );
+            }
+        }
+    } else if (ret < 0) {
+        throw std::runtime_error("Failed to poll recv CQ");
+    }
 }
 
 }  // namespace rdma_util

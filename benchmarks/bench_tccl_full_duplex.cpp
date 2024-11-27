@@ -2,7 +2,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <random>
+#include <thread>
 #include <utility>
+#include <vector>
 
 #include "rdma_util.h"
 
@@ -11,7 +14,7 @@
 #include "gpu_mem_util.h"
 
 constexpr uint32_t kGPU1 = 0;
-constexpr uint32_t kGPU2 = 3;
+constexpr uint32_t kGPU2 = 2;
 constexpr uint64_t kDataBufferSize = 75ull * 1024 * 1024 * 1024;
 
 #else
@@ -23,9 +26,18 @@ constexpr uint64_t kDataBufferSize = 40ull * 1024 * 1024 * 1024;
 constexpr const char* kRNIC1 = "mlx5_0";
 constexpr const char* kRNIC2 = "mlx5_1";
 
-constexpr uint32_t kChunkSize = 16ull * 1024 * 1024;
+constexpr const uint64_t KB = 1024ull;
+constexpr const uint64_t MB = 1024ull * KB;
+constexpr const uint64_t GB = 1024ull * MB;
 
-std::atomic<uint64_t> bytes_transferred;
+constexpr const uint32_t kChunkSize = 256ull * KB;
+constexpr const uint64_t dop = 256;
+
+constexpr const uint64_t kSlotCount = kDataBufferSize / kChunkSize;
+constexpr const uint64_t kSendRecvCount = 1024 * GB / kChunkSize;
+
+static std::atomic<uint64_t> bytes_transferred;
+static bool started = false;
 
 void reporter_thread(rdma_util::Arc<std::atomic<uint8_t>> finished) {
     uint64_t prev = 0, curr = 0;
@@ -49,8 +61,29 @@ void sender_thread(
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t lkey = data_mr->get_lkey();
 
-    for (uint64_t i = 0; i < kDataBufferSize / kChunkSize; ++i) {
-        context->send(stream_id, base_addr + i * kChunkSize, kChunkSize, lkey).wait();
+    std::random_device rd;
+    std::mt19937_64 eng(rd());
+    std::uniform_int_distribution<uint64_t> distr;
+
+    while (!started) {
+        std::this_thread::yield();
+    }
+
+    std::vector<rdma_util::Handle> handles {};
+    handles.reserve(dop);
+
+    for (uint64_t i = 0; i < kSendRecvCount; ++i) {
+        auto slot_idx = distr(eng) % kSlotCount;
+        handles.push_back(context->send(stream_id, base_addr + slot_idx * kChunkSize, kChunkSize, lkey));
+        if (handles.size() == dop) {
+            handles.back().wait();
+            handles.clear();
+        }
+    }
+
+    if (handles.size() == dop) {
+        handles.back().wait();
+        handles.clear();
     }
 
     while (finished->load(std::memory_order_relaxed) < 2) {
@@ -67,10 +100,30 @@ void recver_thread(
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t rkey = data_mr->get_rkey();
 
-    for (uint64_t i = 0; i < kDataBufferSize / kChunkSize; ++i) {
-        context->recv(stream_id, base_addr + (kDataBufferSize / kChunkSize - i - 1) * kChunkSize, kChunkSize, rkey)
-            .wait();
-        bytes_transferred.fetch_add(kChunkSize);
+    std::random_device rd;
+    std::mt19937_64 eng(rd());
+    std::uniform_int_distribution<uint64_t> distr;
+
+    while (!started) {
+        std::this_thread::yield();
+    }
+
+    std::vector<rdma_util::Handle> handles {};
+    handles.reserve(dop);
+
+    for (uint64_t i = 0; i < kSendRecvCount; ++i) {
+        auto slot_idx = distr(eng) % kSlotCount;
+        handles.push_back(context->recv(stream_id, base_addr + slot_idx * kChunkSize, kChunkSize, rkey));
+        if (handles.size() == dop) {
+            handles.back().wait();
+            bytes_transferred.fetch_add(kChunkSize * dop);
+            handles.clear();
+        }
+    }
+
+    if (handles.size() == dop) {
+        handles.back().wait();
+        handles.clear();
     }
 
     finished->fetch_add(1);
@@ -113,8 +166,8 @@ int main() {
     );
 #endif
 
-    auto context1 = rdma_util::TcclContext::create(std::move(qp1));
-    auto context2 = rdma_util::TcclContext::create(std::move(qp2));
+    auto context1 = rdma_util::TcclContext::create(std::move(qp1), false);
+    auto context2 = rdma_util::TcclContext::create(std::move(qp2), false);
 
     auto finished = std::shared_ptr<std::atomic<uint8_t>>(new std::atomic<uint8_t>(0));
 
@@ -125,11 +178,25 @@ int main() {
     std::thread sender2(sender_thread, context2, data_mr2, 0, finished);
     std::thread recver2(recver_thread, context1, data_mr1, 0, finished);
 
+    std::vector<std::thread> polling_threads {};
+    polling_threads.push_back(std::thread([context1, context2, finished] {
+        while (finished->load(std::memory_order_relaxed) < 2) {
+            context1->poll_both();
+            context2->poll_both();
+        }
+    }));
+
+    started = true;
+
     reporter.join();
     sender1.join();
     sender2.join();
     recver1.join();
     recver2.join();
+
+    for (auto& thread : polling_threads) {
+        thread.join();
+    }
 
     printf("received\n");
 

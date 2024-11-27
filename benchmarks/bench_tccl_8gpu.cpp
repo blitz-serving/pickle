@@ -1,6 +1,7 @@
 #include <infiniband/verbs.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
@@ -28,11 +29,11 @@ constexpr const uint64_t MB = 1024ull * KB;
 constexpr const uint64_t GB = 1024ull * MB;
 
 constexpr const uint32_t kChunkSize = 256ull * KB;
-constexpr const uint64_t dop = 4096;
+constexpr const uint64_t dop = 256;
 constexpr const ibv_rate kRate = ibv_rate::IBV_RATE_MAX;
 
 constexpr const uint64_t kSlotCount = kDataBufferSize / kChunkSize;
-constexpr const uint64_t kSendRecvCount = 600 * GB / kChunkSize;
+constexpr const uint64_t kSendRecvCount = 1024 * GB / kChunkSize;
 
 static std::atomic<uint64_t> bytes_transferred(0);
 static std::atomic<uint64_t> exited_recver_count(0);
@@ -176,11 +177,20 @@ int main() {
         );
 #endif
 
-        auto context1 = rdma_util::TcclContext::create(std::move(qp1));
-        auto context2 = rdma_util::TcclContext::create(std::move(qp2));
+        auto context1 = rdma_util::TcclContext::create(std::move(qp1), false);
+        auto context2 = rdma_util::TcclContext::create(std::move(qp2), false);
 
         threads.push_back(std::thread(sender_thread, context1, data_mr1, 0));
         threads.push_back(std::thread(recver_thread, context2, data_mr2, 0));
+        threads.push_back(std::thread([context1, context2] {
+            while (1) {
+                context1->poll_both();
+                context2->poll_both();
+                if (exited_recver_count.load() >= 4) {
+                    return;
+                }
+            }
+        }));
     }
 
     std::thread reporter(reporter_thread);
