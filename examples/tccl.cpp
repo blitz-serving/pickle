@@ -6,19 +6,11 @@
 #include <utility>
 #include <vector>
 
-#ifdef USE_CUDA
-
 #include "gpu_mem_util.h"
 
 constexpr uint32_t kGPU1 = 4;
 constexpr uint32_t kGPU2 = 7;
 constexpr uint64_t kDataBufferSize = 75ull * 1024 * 1024 * 1024;
-
-#else
-
-constexpr uint64_t kDataBufferSize = 1024 * 1024 * 1024;
-
-#endif
 
 constexpr const char* kRNIC1 = "mlx5_4";
 constexpr const char* kRNIC2 = "mlx5_5";
@@ -26,13 +18,8 @@ constexpr const char* kRNIC2 = "mlx5_5";
 static bool stopped = false;
 
 int main() {
-#ifdef USE_CUDA
     auto data_buffer1 = gpu_mem_util::malloc_gpu_buffer(kDataBufferSize, kGPU1);
     auto data_buffer2 = gpu_mem_util::malloc_gpu_buffer(kDataBufferSize, kGPU2);
-#else
-    auto data_buffer1 = malloc(kDataBufferSize);
-    auto data_buffer2 = malloc(kDataBufferSize);
-#endif
 
     auto qp1 = rdma_util::RcQueuePair::create(kRNIC1);
     auto qp2 = rdma_util::RcQueuePair::create(kRNIC2);
@@ -82,13 +69,8 @@ int main() {
 
     wait_handles.join();
 
-#ifdef USE_CUDA
     gpu_mem_util::free_gpu_buffer(data_buffer1, kGPU1);
     gpu_mem_util::free_gpu_buffer(data_buffer2, kGPU2);
-#else
-    free(data_buffer1);
-    free(data_buffer2);
-#endif
 
     stopped = true;
     polling_thread.join();

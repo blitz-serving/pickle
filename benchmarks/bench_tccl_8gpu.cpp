@@ -10,19 +10,10 @@
 #include <utility>
 #include <vector>
 
+#include "gpu_mem_util.h"
 #include "rdma_util.h"
 
-#ifdef USE_CUDA
-
-#include "gpu_mem_util.h"
-
 constexpr uint64_t kDataBufferSize = 75ull * 1024 * 1024 * 1024;
-
-#else
-
-constexpr uint64_t kDataBufferSize = 40ull * 1024 * 1024 * 1024;
-
-#endif
 
 constexpr const uint64_t KB = 1024ull;
 constexpr const uint64_t MB = 1024ull * KB;
@@ -145,7 +136,6 @@ int main() {
         qp1->bring_up(qp2->get_handshake_data(), kRate);
         qp2->bring_up(qp1->get_handshake_data(), kRate);
 
-#ifdef USE_CUDA
         auto gpu_idx1 = GPUs[i * 2];
         auto gpu_idx2 = GPUs[i * 2 + 1];
         rdma_util::Arc<rdma_util::MemoryRegion> data_mr1 = rdma_util::MemoryRegion::create(
@@ -164,18 +154,6 @@ int main() {
             ),
             kDataBufferSize
         );
-#else
-        rdma_util::Arc<rdma_util::MemoryRegion> data_mr1 = rdma_util::MemoryRegion::create(
-            qp1->get_pd(),
-            rdma_util::Arc<void>(malloc(kDataBufferSize), free),
-            kDataBufferSize
-        );
-        rdma_util::Arc<rdma_util::MemoryRegion> data_mr2 = rdma_util::MemoryRegion::create(
-            qp2->get_pd(),
-            rdma_util::Arc<void>(malloc(kDataBufferSize), free),
-            kDataBufferSize
-        );
-#endif
 
         auto context1 = rdma_util::TcclContext::create(std::move(qp1), false);
         auto context2 = rdma_util::TcclContext::create(std::move(qp2), false);

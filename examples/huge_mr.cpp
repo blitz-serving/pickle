@@ -1,9 +1,5 @@
-
-#include <cstdio>
-
-#ifdef USE_CUDA
-
 #include <cstdint>
+#include <cstdio>
 #include <utility>
 
 #include "gpu_mem_util.h"
@@ -27,12 +23,3 @@ int main() {
 
     return 0;
 }
-
-#else
-
-int main() {
-    printf("CUDA is disabled\n");
-    return 0;
-}
-
-#endif

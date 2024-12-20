@@ -1,10 +1,8 @@
-#include <cstdio>
-
-#ifdef USE_CUDA
 #include <cuda_runtime.h>
 
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <thread>
 #include <vector>
 
@@ -123,12 +121,3 @@ int sender_thread(rdma_util::Arc<rdma_util::RcQueuePair> qp, rdma_util::Arc<rdma
 
     return 0;
 }
-
-#else
-
-int main() {
-    printf("CUDA is disabled\n");
-    return 0;
-}
-
-#endif

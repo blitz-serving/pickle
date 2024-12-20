@@ -1,6 +1,6 @@
-cmake_minimum_required(VERSION 3.5 FATAL_ERROR)
+cmake_minimum_required(VERSION 3.15 FATAL_ERROR)
 cmake_policy(SET CMP0077 NEW)
-project(NanoGDR LANGUAGES CXX)
+project(NanoGDR LANGUAGES CUDA CXX)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,7 +9,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(BUILD_TESTS "Build tests" ON)
 option(BUILD_EXAMPLES "Build examples" ON)
 option(BUILD_BENCHMARKS "Build benchmarks" ON)
-option(USE_CUDA "Use CUDA" ON)
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 
 # Add third-party libraries
@@ -27,20 +26,16 @@ target_include_directories(rdma_util PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 
-# Handle CUDA
-if(USE_CUDA)
-    set(CUDA_TOOLKIT_ROOT_DIR "/usr/local/cuda")
-    find_package(CUDA REQUIRED)
-    add_library(gpu_mem_util "src/gpu_mem_util.cpp")
-    message(STATUS "CUDA_INCLUDE_DIRS: ${CUDA_INCLUDE_DIRS}")
-    message(STATUS "CUDA_LIBRARIES: ${CUDA_LIBRARIES}")
-    target_link_libraries(gpu_mem_util PUBLIC ${CUDA_LIBRARIES})
-    target_include_directories(gpu_mem_util PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-        $<INSTALL_INTERFACE:include>
-        ${CUDA_INCLUDE_DIRS}
-    )
-endif()
+add_library(gpu_mem_util "src/gpu_mem_util.cpp")
+enable_language(CUDA)
+find_package(CUDAToolkit)
+target_link_libraries(gpu_mem_util PUBLIC CUDA::cudart)
+target_link_libraries(gpu_mem_util PUBLIC ${CUDA_LIBRARIES})
+target_include_directories(gpu_mem_util PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+    ${CUDA_INCLUDE_DIRS}
+)
 
 # Add test executables
 if(BUILD_TESTS)
@@ -49,14 +44,7 @@ if(BUILD_TESTS)
     foreach(TEST_SOURCE ${TEST_SOURCES})
         get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
         add_executable(${TEST_NAME} ${TEST_SOURCE})
-
-        if(USE_CUDA)
-            target_compile_definitions(${TEST_NAME} PRIVATE USE_CUDA)
-            target_link_libraries(${TEST_NAME} gtest_main rdma_util gpu_mem_util)
-        else()
-            target_link_libraries(${TEST_NAME} gtest_main rdma_util)
-        endif()
-
+        target_link_libraries(${TEST_NAME} gtest_main rdma_util gpu_mem_util)
         add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
     endforeach()
 endif()
@@ -68,13 +56,7 @@ if(BUILD_EXAMPLES)
     foreach(EXAMPLE_SOURCE ${EXAMPLE_SOURCES})
         get_filename_component(EXAMPLE_NAME ${EXAMPLE_SOURCE} NAME_WE)
         add_executable(${EXAMPLE_NAME} ${EXAMPLE_SOURCE})
-
-        if(USE_CUDA)
-            target_compile_definitions(${EXAMPLE_NAME} PRIVATE USE_CUDA)
-            target_link_libraries(${EXAMPLE_NAME} rdma_util gpu_mem_util)
-        else()
-            target_link_libraries(${EXAMPLE_NAME} rdma_util)
-        endif()
+        target_link_libraries(${EXAMPLE_NAME} rdma_util gpu_mem_util)
     endforeach()
 endif()
 
@@ -85,13 +67,7 @@ if(BUILD_BENCHMARKS)
     foreach(BENCHMARK_SOURCE ${BENCHMARK_SOURCES})
         get_filename_component(BENCHMARK_NAME ${BENCHMARK_SOURCE} NAME_WE)
         add_executable(${BENCHMARK_NAME} ${BENCHMARK_SOURCE})
-
-        if(USE_CUDA)
-            target_compile_definitions(${BENCHMARK_NAME} PRIVATE USE_CUDA)
-            target_link_libraries(${BENCHMARK_NAME} rdma_util gpu_mem_util pthread)
-        else()
-            target_link_libraries(${BENCHMARK_NAME} rdma_util pthread)
-        endif()
+        target_link_libraries(${BENCHMARK_NAME} rdma_util gpu_mem_util pthread)
     endforeach()
 endif()
 

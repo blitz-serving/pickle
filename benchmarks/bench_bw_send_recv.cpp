@@ -6,15 +6,10 @@
 #include <thread>
 #include <vector>
 
-#include "rdma_util.h"
-
-#ifdef USE_CUDA
-
 #include "gpu_mem_util.h"
+#include "rdma_util.h"
 constexpr uint32_t kGPU1 = 2;
 constexpr uint32_t kGPU2 = 7;
-
-#endif
 
 constexpr uint64_t kChunkSize = 64ull * 1024 * 1024;
 constexpr uint64_t kSlotNum = 64;
@@ -32,13 +27,8 @@ int recver_thread(rdma_util::Arc<rdma_util::RcQueuePair> qp, rdma_util::Arc<rdma
 int sender_thread(rdma_util::Arc<rdma_util::RcQueuePair> qp, rdma_util::Arc<rdma_util::MemoryRegion> mr);
 
 int main() {
-#ifdef USE_CUDA
     auto send_buffer = gpu_mem_util::malloc_gpu_buffer(kBufferSize, kGPU1);
     auto recv_buffer = gpu_mem_util::malloc_gpu_buffer(kBufferSize, kGPU2);
-#else
-    auto send_buffer = malloc(kBufferSize);
-    auto recv_buffer = malloc(kBufferSize);
-#endif
 
     if (send_buffer == nullptr || recv_buffer == nullptr) {
         printf("Failed to allocate buffer\n");
@@ -84,13 +74,8 @@ int main() {
         }
     }
 
-#ifdef USE_CUDA
     gpu_mem_util::free_gpu_buffer(send_buffer, 0);
     gpu_mem_util::free_gpu_buffer(recv_buffer, 7);
-#else
-    free(send_buffer);
-    free(recv_buffer);
-#endif
 
     return 0;
 }
