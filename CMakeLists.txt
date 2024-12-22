@@ -26,6 +26,13 @@ target_include_directories(rdma_util PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 
+add_library(pickle "src/pickle.cpp")
+target_link_libraries(pickle PUBLIC rdma_util)
+target_include_directories(pickle PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
+
 add_library(gpu_mem_util "src/gpu_mem_util.cpp")
 enable_language(CUDA)
 find_package(CUDAToolkit)

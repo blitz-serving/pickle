@@ -394,14 +394,14 @@ class TcclContext {
     std::queue<Ticket> pending_local_recv_request_queue_;
     MultiMap<Ticket> pending_remote_recv_request_map_;
     MultiMap<Ticket> pending_local_send_request_map_;
-    MultiMap<rdma_util::Arc<std::atomic<bool>>> pending_local_send_flag_map_;
+    MultiMap<Arc<std::atomic<bool>>> pending_local_send_flag_map_;
     std::queue<uint64_t> free_post_send_send_slots_;
     uint64_t post_send_write_slot_available_;
     uint64_t post_send_send_slot_available_;
 
     // Used in recv_one_round
     uint64_t pending_recv_request_count_;
-    MultiMap<rdma_util::Arc<std::atomic<bool>>> pending_local_recv_request_map_;
+    MultiMap<Arc<std::atomic<bool>>> pending_local_recv_request_map_;
 
     // Background polling
     bool background_polling_;

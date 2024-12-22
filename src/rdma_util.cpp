@@ -61,7 +61,7 @@ Box<Context> Context::create(const char* dev_name) noexcept(false) {
     return Box<Context>(new Context(dev_name));
 }
 
-ProtectionDomain::ProtectionDomain(rdma_util::Arc<Context> context) noexcept(false) {
+ProtectionDomain::ProtectionDomain(Arc<Context> context) noexcept(false) {
     this->context_ = context;
     this->inner = ibv_alloc_pd(context->inner);
     if (this->inner == nullptr) {
@@ -69,7 +69,7 @@ ProtectionDomain::ProtectionDomain(rdma_util::Arc<Context> context) noexcept(fal
     }
 }
 
-Box<ProtectionDomain> ProtectionDomain::create(rdma_util::Arc<Context> context) noexcept(false) {
+Box<ProtectionDomain> ProtectionDomain::create(Arc<Context> context) noexcept(false) {
     return Box<ProtectionDomain>(new ProtectionDomain(context));
 }
 
@@ -79,7 +79,7 @@ ProtectionDomain::~ProtectionDomain() {
     }
 }
 
-RcQueuePair::RcQueuePair(rdma_util::Arc<ProtectionDomain> pd) noexcept(false) {
+RcQueuePair::RcQueuePair(Arc<ProtectionDomain> pd) noexcept(false) {
     this->pd_ = pd;
     this->context_ = pd->context_;
     auto send_cq = ibv_create_cq(context_->inner, 128, nullptr, nullptr, 0);
@@ -118,11 +118,11 @@ Box<RcQueuePair> RcQueuePair::create(const char* dev_name) noexcept(false) {
     return Box<RcQueuePair>(new RcQueuePair(ProtectionDomain::create(Context::create(dev_name))));
 }
 
-Box<RcQueuePair> RcQueuePair::create(rdma_util::Arc<Context> context) noexcept(false) {
+Box<RcQueuePair> RcQueuePair::create(Arc<Context> context) noexcept(false) {
     return Box<RcQueuePair>(new RcQueuePair(ProtectionDomain::create(context)));
 }
 
-Box<RcQueuePair> RcQueuePair::create(rdma_util::Arc<ProtectionDomain> pd) noexcept(false) {
+Box<RcQueuePair> RcQueuePair::create(Arc<ProtectionDomain> pd) noexcept(false) {
     return Box<RcQueuePair>(new RcQueuePair(pd));
 }
 
@@ -583,11 +583,7 @@ int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, ibv_wc* wc_buffer, std
     return ret;
 }
 
-MemoryRegion::MemoryRegion(
-    rdma_util::Arc<ProtectionDomain> pd,
-    rdma_util::Arc<void> buffer_with_deleter,
-    uint64_t length
-) noexcept(false) {
+MemoryRegion::MemoryRegion(Arc<ProtectionDomain> pd, Arc<void> buffer_with_deleter, uint64_t length) noexcept(false) {
     auto addr = buffer_with_deleter.get();
 
     this->inner_buffer_with_deleter_ = buffer_with_deleter;
@@ -605,7 +601,7 @@ MemoryRegion::MemoryRegion(
     }
 }
 
-MemoryRegion::MemoryRegion(rdma_util::Arc<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false) {
+MemoryRegion::MemoryRegion(Arc<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false) {
     this->inner_buffer_with_deleter_ = nullptr;
     this->pd_ = pd;
     this->context_ = pd->context_;
@@ -627,21 +623,16 @@ MemoryRegion::~MemoryRegion() {
     }
 }
 
-Box<MemoryRegion> MemoryRegion::create(
-    rdma_util::Arc<ProtectionDomain> pd,
-    rdma_util::Arc<void> buffer_with_deleter,
-    uint64_t length
-) noexcept(false) {
+Box<MemoryRegion>
+MemoryRegion::create(Arc<ProtectionDomain> pd, Arc<void> buffer_with_deleter, uint64_t length) noexcept(false) {
     return Box<MemoryRegion>(new MemoryRegion(pd, buffer_with_deleter, length));
 }
 
-Box<MemoryRegion> MemoryRegion::create(rdma_util::Arc<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false
-) {
+Box<MemoryRegion> MemoryRegion::create(Arc<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false) {
     return Box<MemoryRegion>(new MemoryRegion(pd, addr, length));
 }
 
-rdma_util::Arc<TcclContext>
-TcclContext::create(Box<RcQueuePair> qp, bool spawn_polling_thread, uint64_t dop) noexcept(false) {
+Arc<TcclContext> TcclContext::create(Box<RcQueuePair> qp, bool spawn_polling_thread, uint64_t dop) noexcept(false) {
     Arc<TcclContext> tccl_context = Arc<TcclContext>(new TcclContext());
     tccl_context->initialize(std::move(qp), dop);
     if (spawn_polling_thread) {
@@ -684,7 +675,7 @@ void TcclContext::initialize(Box<RcQueuePair> qp, uint64_t dop) noexcept(false) 
 
     this->host_send_buffer_ = MemoryRegion::create(
         this->qp_->get_pd(),
-        rdma_util::Arc<void>(new Ticket[dop], [](Ticket* p) { delete[] p; }),
+        Arc<void>(new Ticket[dop], [](Ticket* p) { delete[] p; }),
         sizeof(Ticket) * this->dop_
     );
     this->send_buffer_addr_ = uint64_t(this->host_send_buffer_->get_addr());
@@ -692,7 +683,7 @@ void TcclContext::initialize(Box<RcQueuePair> qp, uint64_t dop) noexcept(false) 
 
     this->host_recv_buffer_ = MemoryRegion::create(
         this->qp_->get_pd(),
-        rdma_util::Arc<void>(new Ticket[2 * dop], [](Ticket* p) { delete[] p; }),
+        Arc<void>(new Ticket[2 * dop], [](Ticket* p) { delete[] p; }),
         sizeof(Ticket) * 2 * this->dop_
     );
     this->recv_buffer_addr_ = uint64_t(this->host_recv_buffer_->get_addr());
@@ -704,7 +695,7 @@ void TcclContext::initialize(Box<RcQueuePair> qp, uint64_t dop) noexcept(false) 
     this->pending_local_recv_request_queue_ = std::queue<Ticket>();
     this->pending_remote_recv_request_map_ = MultiMap<Ticket>();
     this->pending_local_send_request_map_ = MultiMap<Ticket>();
-    this->pending_local_send_flag_map_ = MultiMap<rdma_util::Arc<std::atomic<bool>>>();
+    this->pending_local_send_flag_map_ = MultiMap<Arc<std::atomic<bool>>>();
 
     this->free_post_send_send_slots_ = std::queue<uint64_t>();
     this->post_send_write_slot_available_ = this->dop_;
@@ -714,7 +705,7 @@ void TcclContext::initialize(Box<RcQueuePair> qp, uint64_t dop) noexcept(false) 
     }
 
     this->pending_recv_request_count_ = 0;
-    this->pending_local_recv_request_map_ = MultiMap<rdma_util::Arc<std::atomic<bool>>>();
+    this->pending_local_recv_request_map_ = MultiMap<Arc<std::atomic<bool>>>();
     for (uint64_t wr_id = 0; wr_id < 2 * dop; ++wr_id) {
         this->qp_->post_recv(
             wr_id,
@@ -887,8 +878,7 @@ void TcclContext::poll_recv_one_round_inner() noexcept(false) {
             } else {
                 auto wr_id = wc.wr_id;
                 if (wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
-                    std::queue<rdma_util::Arc<std::atomic<bool>>>& queue =
-                        this->pending_local_recv_request_map_[wc.imm_data];
+                    std::queue<Arc<std::atomic<bool>>>& queue = this->pending_local_recv_request_map_[wc.imm_data];
                     queue.front()->store(1);
                     queue.pop();
                     this->pending_recv_request_count_--;
