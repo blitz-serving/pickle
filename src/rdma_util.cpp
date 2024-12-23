@@ -103,7 +103,7 @@ RcQueuePair::RcQueuePair(Arc<ProtectionDomain> pd) noexcept(false) {
     init_attr.cap.max_send_sge = 1;
     init_attr.cap.max_recv_sge = 1;
     init_attr.cap.max_inline_data = 64;
-    init_attr.qp_type = IBV_QPT_RC;
+    init_attr.qp_type = ibv_qp_type::IBV_QPT_RC;
     init_attr.sq_sig_all = 0;
 
     this->inner = ibv_create_qp(pd->inner, &init_attr);
@@ -137,7 +137,7 @@ RcQueuePair::~RcQueuePair() {
 QueuePairState RcQueuePair::query_qp_state() noexcept(false) {
     ibv_qp_attr attr;
     ibv_qp_init_attr init_attr;
-    if (ibv_query_qp(this->inner, &attr, IBV_QP_STATE, &init_attr)) {
+    if (ibv_query_qp(this->inner, &attr, ibv_qp_attr_mask::IBV_QP_STATE, &init_attr)) {
         throw std::runtime_error("Failed to query QP state");
     }
     switch (attr.qp_state) {
@@ -204,7 +204,8 @@ void RcQueuePair::bring_up(const HandshakeData& handshake_data, ibv_rate rate) n
 
         ibv_qp_attr attr {};
         attr.qp_state = ibv_qp_state::IBV_QPS_INIT;
-        attr.qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
+        attr.qp_access_flags = ibv_access_flags::IBV_ACCESS_LOCAL_WRITE | ibv_access_flags::IBV_ACCESS_REMOTE_READ
+            | ibv_access_flags::IBV_ACCESS_REMOTE_WRITE;
         attr.pkey_index = 0;
         attr.port_num = 1;
 
@@ -278,7 +279,7 @@ int RcQueuePair::post_send_send(
     wr.next = nullptr;
     wr.sg_list = &sge;
     wr.num_sge = 1;
-    wr.opcode = IBV_WR_SEND;
+    wr.opcode = ibv_wr_opcode::IBV_WR_SEND;
     wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
 
     return ibv_post_send(this->inner, &wr, &bad_wr);
@@ -304,7 +305,7 @@ int RcQueuePair::post_send_send_with_imm(
     wr.next = nullptr;
     wr.sg_list = &sge;
     wr.num_sge = 1;
-    wr.opcode = IBV_WR_SEND_WITH_IMM;
+    wr.opcode = ibv_wr_opcode::IBV_WR_SEND_WITH_IMM;
     wr.imm_data = htonl(imm);
     wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
 
@@ -332,7 +333,7 @@ int RcQueuePair::post_send_read(
     wr.next = nullptr;
     wr.sg_list = &sge;
     wr.num_sge = 1;
-    wr.opcode = IBV_WR_RDMA_READ;
+    wr.opcode = ibv_wr_opcode::IBV_WR_RDMA_READ;
     wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
     wr.wr.rdma.remote_addr = raddr;
     wr.wr.rdma.rkey = rkey;
@@ -361,7 +362,7 @@ int RcQueuePair::post_send_write(
     wr.next = nullptr;
     wr.sg_list = &sge;
     wr.num_sge = 1;
-    wr.opcode = IBV_WR_RDMA_WRITE;
+    wr.opcode = ibv_wr_opcode::IBV_WR_RDMA_WRITE;
     wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
     wr.wr.rdma.remote_addr = raddr;
     wr.wr.rdma.rkey = rkey;
@@ -391,13 +392,23 @@ int RcQueuePair::post_send_write_with_imm(
     wr.next = nullptr;
     wr.sg_list = &sge;
     wr.num_sge = 1;
-    wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+    wr.opcode = ibv_wr_opcode::IBV_WR_RDMA_WRITE_WITH_IMM;
     wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
     wr.wr.rdma.remote_addr = raddr;
     wr.wr.rdma.rkey = rkey;
     wr.imm_data = htonl(imm);
 
     return ibv_post_send(this->inner, &wr, &bad_wr);
+}
+
+int RcQueuePair::post_send_wrs(ibv_send_wr* wr_list) noexcept {
+    ibv_send_wr* bad_wr = nullptr;
+    return ibv_post_send(this->inner, wr_list, &bad_wr);
+}
+
+int RcQueuePair::post_recv_wrs(ibv_recv_wr* wr_list) noexcept {
+    ibv_recv_wr* bad_wr = nullptr;
+    return ibv_post_recv(this->inner, wr_list, &bad_wr);
 }
 
 int RcQueuePair::post_recv(uint64_t wr_id, uint64_t addr, uint32_t length, uint32_t lkey) noexcept {
@@ -835,12 +846,12 @@ void TcclContext::poll_send_one_round_inner() noexcept(false) {
         throw std::runtime_error("Failed to poll send CQ");
     } else if (ret > 0) {
         for (const auto& wc : this->polled_send_wcs_) {
-            if (wc.status != IBV_WC_SUCCESS) {
+            if (wc.status != ibv_wc_status::IBV_WC_SUCCESS) {
                 throw std::runtime_error("Failed to send data");
-            } else if (wc.opcode == IBV_WC_SEND) {
+            } else if (wc.opcode == ibv_wc_opcode::IBV_WC_SEND) {
                 this->free_post_send_send_slots_.push(wc.wr_id);
                 this->post_send_send_slot_available_++;
-            } else if (wc.opcode == IBV_WC_RDMA_WRITE) {
+            } else if (wc.opcode == ibv_wc_opcode::IBV_WC_RDMA_WRITE) {
                 this->pending_local_send_flag_map_[wc.wr_id].front()->store(true);
                 this->pending_local_send_flag_map_[wc.wr_id].pop();
                 this->post_send_write_slot_available_++;
@@ -873,11 +884,11 @@ void TcclContext::poll_recv_one_round_inner() noexcept(false) {
     );
     if (ret > 0) {
         for (const auto& wc : this->polled_recv_wcs_) {
-            if (wc.status != IBV_WC_SUCCESS) {
+            if (wc.status != ibv_wc_status::IBV_WC_SUCCESS) {
                 throw std::runtime_error("Failed to receive data");
             } else {
                 auto wr_id = wc.wr_id;
-                if (wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
+                if (wc.opcode == ibv_wc_opcode::IBV_WC_RECV_RDMA_WITH_IMM) {
                     std::queue<Arc<std::atomic<bool>>>& queue = this->pending_local_recv_request_map_[wc.imm_data];
                     queue.front()->store(1);
                     queue.pop();

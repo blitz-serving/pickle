@@ -3,17 +3,10 @@
 
 #include <infiniband/verbs.h>
 
-#include <atomic>
-#include <cassert>
-#include <cstdint>
-#include <ios>
 #include <map>
 #include <memory>
 #include <queue>
 #include <sstream>
-#include <string>
-#include <thread>
-#include <vector>
 
 #include "concurrentqueue.h"
 
@@ -189,7 +182,11 @@ class RcQueuePair {
         bool signaled
     ) noexcept;
 
+    int post_send_wrs(ibv_send_wr* wr_list) noexcept;
+
     int post_recv(uint64_t wr_id, uint64_t addr, uint32_t length, uint32_t lkey) noexcept;
+
+    int post_recv_wrs(ibv_recv_wr* wr_list) noexcept;
 
     /**
      * @brief poll the send_cq until at least `num_expected_completions` 

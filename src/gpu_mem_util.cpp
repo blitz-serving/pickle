@@ -1,7 +1,6 @@
 #include <cuda_runtime.h>
 
 #include <cstdint>
-#include <cstdio>
 
 namespace gpu_mem_util {
 
