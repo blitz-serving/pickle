@@ -14,49 +14,49 @@ std::shared_ptr<PickleSender> PickleSender::create(std::unique_ptr<RcQueuePair> 
     return std::shared_ptr<PickleSender>(new PickleSender(std::move(qp), dop));
 }
 
-void PickleSender::initialize(std::unique_ptr<RcQueuePair> qp, uint64_t dop) noexcept(false) {
-    this->dop_ = dop;
+// void PickleSender::initialize(std::unique_ptr<RcQueuePair> qp, uint64_t dop) noexcept(false) {
+//     this->dop_ = dop;
 
-    this->qp_ = std::move(qp);
+//     this->qp_ = std::move(qp);
 
-    this->send_ibv_wc_buffer_ = std::vector<ibv_wc>(dop);
-    this->polled_send_wcs_ = std::vector<WorkCompletion>();
-    this->polled_send_wcs_.reserve(this->dop_);
+//     this->send_ibv_wc_buffer_ = std::vector<ibv_wc>(dop);
+//     this->polled_send_wcs_ = std::vector<WorkCompletion>();
+//     this->polled_send_wcs_.reserve(this->dop_);
 
-    this->recv_ibv_wc_buffer_ = std::vector<ibv_wc>(dop);
-    this->polled_recv_wcs_ = std::vector<WorkCompletion>();
-    this->polled_recv_wcs_.reserve(this->dop_);
+//     this->recv_ibv_wc_buffer_ = std::vector<ibv_wc>(dop);
+//     this->polled_recv_wcs_ = std::vector<WorkCompletion>();
+//     this->polled_recv_wcs_.reserve(this->dop_);
 
-    this->wr_list_capacity_ = this->dop_;
-    this->send_wr_list_index_ = 0;
-    this->send_wr_list_ = std::vector<ibv_send_wr>(this->wr_list_capacity_);
-    this->send_sge_list_ = std::vector<ibv_sge>(this->wr_list_capacity_);
+//     this->wr_list_capacity_ = this->dop_;
+//     this->send_wr_list_index_ = 0;
+//     this->send_wr_list_ = std::vector<ibv_send_wr>(this->wr_list_capacity_);
+//     this->send_sge_list_ = std::vector<ibv_sge>(this->wr_list_capacity_);
 
-    this->send_request_command_queue_ = Queue<Command>();
+//     this->send_request_command_queue_ = Queue<Command>();
 
-    this->host_recv_buffer_ = MemoryRegion::create(
-        this->qp_->get_pd(),
-        std::shared_ptr<void>(new Ticket[dop], [](Ticket* p) { delete[] p; }),
-        sizeof(Ticket) * this->dop_
-    );
-    this->recv_buffer_addr_ = uint64_t(this->host_recv_buffer_->get_addr());
-    this->recv_buffer_lkey_ = this->host_recv_buffer_->get_lkey();
+//     this->host_recv_buffer_ = MemoryRegion::create(
+//         this->qp_->get_pd(),
+//         std::shared_ptr<void>(new Ticket[dop], [](Ticket* p) { delete[] p; }),
+//         sizeof(Ticket) * this->dop_
+//     );
+//     this->recv_buffer_addr_ = uint64_t(this->host_recv_buffer_->get_addr());
+//     this->recv_buffer_lkey_ = this->host_recv_buffer_->get_lkey();
 
-    this->remote_recv_request_queue_ = std::queue<Ticket>();
+//     this->remote_recv_request_queue_ = std::queue<Ticket>();
 
-    this->pending_remote_recv_request_map_ = MultiMap<Ticket>();
-    this->pending_local_send_request_map_ = MultiMap<Ticket>();
-    this->pending_local_send_flag_map_ = MultiMap<std::shared_ptr<std::atomic<bool>>>();
+//     this->pending_remote_recv_request_map_ = MultiMap<Ticket>();
+//     this->pending_local_send_request_map_ = MultiMap<Ticket>();
+//     this->pending_local_send_flag_map_ = MultiMap<std::shared_ptr<std::atomic<bool>>>();
 
-    for (uint64_t wr_id = 0; wr_id < dop; ++wr_id) {
-        this->qp_->post_recv(
-            wr_id,
-            this->recv_buffer_addr_ + wr_id * sizeof(Ticket),
-            sizeof(Ticket),
-            this->recv_buffer_lkey_
-        );
-    }
-}
+//     for (uint64_t wr_id = 0; wr_id < dop; ++wr_id) {
+//         this->qp_->post_recv(
+//             wr_id,
+//             this->recv_buffer_addr_ + wr_id * sizeof(Ticket),
+//             sizeof(Ticket),
+//             this->recv_buffer_lkey_
+//         );
+//     }
+// }
 
 Handle PickleSender::send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey) {
     auto flag = std::make_shared<std::atomic<bool>>(false);
@@ -212,44 +212,44 @@ std::shared_ptr<PickleRecver> PickleRecver::create(std::unique_ptr<RcQueuePair> 
     return std::shared_ptr<PickleRecver>(new PickleRecver(std::move(qp), dop));
 }
 
-void PickleRecver::initialize(std::unique_ptr<RcQueuePair> qp, uint64_t dop) noexcept(false) {
-    this->dop_ = dop;
-    this->count_pending_requests_ = 0;
-    this->qp_ = std::move(qp);
+// void PickleRecver::initialize(std::unique_ptr<RcQueuePair> qp, uint64_t dop) noexcept(false) {
+//     this->dop_ = dop;
+//     this->count_pending_requests_ = 0;
+//     this->qp_ = std::move(qp);
 
-    this->send_ibv_wc_buffer_ = std::vector<ibv_wc>(dop);
-    this->polled_send_wcs_ = std::vector<WorkCompletion>();
-    this->polled_send_wcs_.reserve(dop);
+//     this->send_ibv_wc_buffer_ = std::vector<ibv_wc>(dop);
+//     this->polled_send_wcs_ = std::vector<WorkCompletion>();
+//     this->polled_send_wcs_.reserve(dop);
 
-    this->recv_ibv_wc_buffer_ = std::vector<ibv_wc>(dop);
-    this->polled_recv_wcs_ = std::vector<WorkCompletion>();
-    this->polled_recv_wcs_.reserve(dop);
+//     this->recv_ibv_wc_buffer_ = std::vector<ibv_wc>(dop);
+//     this->polled_recv_wcs_ = std::vector<WorkCompletion>();
+//     this->polled_recv_wcs_.reserve(dop);
 
-    this->host_send_buffer_ = MemoryRegion::create(
-        this->qp_->get_pd(),
-        std::shared_ptr<void>(new Ticket[dop], [](Ticket* p) { delete[] p; }),
-        sizeof(Ticket) * dop
-    );
-    this->send_buffer_addr_ = uint64_t(this->host_send_buffer_->get_addr());
-    this->send_buffer_lkey_ = this->host_send_buffer_->get_lkey();
+//     this->host_send_buffer_ = MemoryRegion::create(
+//         this->qp_->get_pd(),
+//         std::shared_ptr<void>(new Ticket[dop], [](Ticket* p) { delete[] p; }),
+//         sizeof(Ticket) * dop
+//     );
+//     this->send_buffer_addr_ = uint64_t(this->host_send_buffer_->get_addr());
+//     this->send_buffer_lkey_ = this->host_send_buffer_->get_lkey();
 
-    this->host_recv_buffer_ = MemoryRegion::create(
-        this->qp_->get_pd(),
-        std::shared_ptr<void>(new Ticket[dop], [](Ticket* p) { delete[] p; }),
-        sizeof(Ticket) * dop
-    );
-    this->recv_buffer_addr_ = uint64_t(this->host_recv_buffer_->get_addr());
-    this->recv_buffer_lkey_ = this->host_recv_buffer_->get_lkey();
+//     this->host_recv_buffer_ = MemoryRegion::create(
+//         this->qp_->get_pd(),
+//         std::shared_ptr<void>(new Ticket[dop], [](Ticket* p) { delete[] p; }),
+//         sizeof(Ticket) * dop
+//     );
+//     this->recv_buffer_addr_ = uint64_t(this->host_recv_buffer_->get_addr());
+//     this->recv_buffer_lkey_ = this->host_recv_buffer_->get_lkey();
 
-    this->free_slots = std::queue<uint64_t>();
-    for (uint64_t wr_id = 0; wr_id < dop; ++wr_id) {
-        this->free_slots.push(wr_id);
-    }
+//     this->free_slots = std::queue<uint64_t>();
+//     for (uint64_t wr_id = 0; wr_id < dop; ++wr_id) {
+//         this->free_slots.push(wr_id);
+//     }
 
-    this->pending_local_recv_request_queue_ = std::queue<Ticket>();
-    this->recv_request_command_queue_ = Queue<Command>();
-    this->pending_local_recv_request_map_ = MultiMap<std::shared_ptr<std::atomic<bool>>>();
-}
+//     this->pending_local_recv_request_queue_ = std::queue<Ticket>();
+//     this->recv_request_command_queue_ = Queue<Command>();
+//     this->pending_local_recv_request_map_ = MultiMap<std::shared_ptr<std::atomic<bool>>>();
+// }
 
 Handle PickleRecver::recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey) {
     auto flag = std::make_shared<std::atomic<bool>>(false);

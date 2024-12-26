@@ -3,6 +3,7 @@
 
 #include <infiniband/verbs.h>
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <queue>
@@ -110,9 +111,10 @@ class PickleSender {
     void poll() noexcept(false);
 
   private:
-    PickleSender(std::unique_ptr<RcQueuePair> qp, uint64_t dop) :
+    PickleSender(std::unique_ptr<RcQueuePair> qp, uint64_t dop, uint64_t chunk_size = 256 * 1024) :
         dop_(dop),
         qp_(std::move(qp)),
+        chunk_size_(chunk_size),
         send_ibv_wc_buffer_(dop),
         recv_ibv_wc_buffer_(dop),
         wr_list_capacity_(dop),
@@ -135,8 +137,6 @@ class PickleSender {
             );
         }
     }
-
-    [[deprecated]] void initialize(std::unique_ptr<RcQueuePair> qp, uint64_t dop) noexcept(false);
 };
 
 class PickleRecver {
@@ -187,8 +187,7 @@ class PickleRecver {
         count_pending_requests_(0),
         qp_(std::move(qp)),
         send_ibv_wc_buffer_(dop),
-        recv_ibv_wc_buffer_(dop),
-        polled_send_wcs_() {
+        recv_ibv_wc_buffer_(dop) {
         this->host_send_buffer_ = MemoryRegion::create(
             this->qp_->get_pd(),
             std::shared_ptr<void>(new Ticket[dop], [](Ticket* p) { delete[] p; }),
@@ -209,8 +208,6 @@ class PickleRecver {
             this->free_slots.push(wr_id);
         }
     }
-
-    [[deprecated]] void initialize(std::unique_ptr<RcQueuePair> qp, uint64_t dop) noexcept(false);
 };
 
 }  // namespace pickle
