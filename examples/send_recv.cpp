@@ -18,11 +18,11 @@ int main() {
         qp1->bring_up(qp2->get_handshake_data());
         qp2->bring_up(qp1->get_handshake_data());
 
-        if (qp1->query_qp_state() != rdma_util::QueuePairState::RTS) {
+        if (qp1->query_qp_state() != ibv_qp_state::IBV_QPS_RTS) {
             printf("qp1 is not in RTS state\n");
             return 1;
         }
-        if (qp2->query_qp_state() != rdma_util::QueuePairState::RTS) {
+        if (qp2->query_qp_state() != ibv_qp_state::IBV_QPS_RTS) {
             printf("qp2 is not in RTS state\n");
             return 1;
         }

@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <infiniband/verbs.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -15,7 +16,7 @@ TEST(OpenDevice, CreateQP) {
     rdma_util::Arc<rdma_util::Context> context = rdma_util::Context::create(dev_name);
     rdma_util::Arc<rdma_util::RcQueuePair> qp = rdma_util::RcQueuePair::create(context);
     qp->bring_up(qp->get_handshake_data());
-    ASSERT_EQ(qp->query_qp_state(), rdma_util::QueuePairState::RTS);
+    ASSERT_EQ(qp->query_qp_state(), ibv_qp_state::IBV_QPS_RTS);
 }
 
 TEST(OpenDevice, SendRecv) {
@@ -23,7 +24,7 @@ TEST(OpenDevice, SendRecv) {
     rdma_util::Arc<rdma_util::Context> context = rdma_util::Context::create(dev_name);
     rdma_util::Arc<rdma_util::RcQueuePair> qp = rdma_util::RcQueuePair::create(context);
     qp->bring_up(qp->get_handshake_data());
-    ASSERT_EQ(qp->query_qp_state(), rdma_util::QueuePairState::RTS);
+    ASSERT_EQ(qp->query_qp_state(), ibv_qp_state::IBV_QPS_RTS);
 
     auto mr = rdma_util::MemoryRegion::create(qp->get_pd(), buffer, 1024);
     std::vector<rdma_util::WorkCompletion> polled_recv_wcs, polled_send_wcs;
@@ -46,7 +47,7 @@ TEST(OpenDevice, SendRecvError) {
     rdma_util::Arc<rdma_util::Context> context = rdma_util::Context::create(dev_name);
     rdma_util::Arc<rdma_util::RcQueuePair> qp = rdma_util::RcQueuePair::create(context);
     qp->bring_up(qp->get_handshake_data());
-    ASSERT_EQ(qp->query_qp_state(), rdma_util::QueuePairState::RTS);
+    ASSERT_EQ(qp->query_qp_state(), ibv_qp_state::IBV_QPS_RTS);
 
     auto mr = rdma_util::MemoryRegion::create(qp->get_pd(), buffer, 1024);
     std::vector<rdma_util::WorkCompletion> polled_recv_wcs, polled_send_wcs;

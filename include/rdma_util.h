@@ -24,14 +24,6 @@ struct HandshakeData {
     uint32_t qp_num;
 };
 
-enum QueuePairState {
-    RESET = 0,
-    INIT = 1,
-    RTR = 2,
-    RTS = 3,
-    UNKNOWN = 4,
-};
-
 struct WorkCompletion {
     uint64_t wr_id;
 
@@ -53,6 +45,7 @@ struct WorkCompletion {
 
 class Context;
 class ProtectionDomain;
+class CompletionQueue;
 class RcQueuePair;
 class MemoryRegion;
 
@@ -60,6 +53,7 @@ class Context {
     friend class ProtectionDomain;
     friend class MemoryRegion;
     friend class RcQueuePair;
+    friend class CompletionQueue;
 
   private:
     ibv_context* inner;
@@ -102,6 +96,26 @@ class ProtectionDomain {
     }
 };
 
+class CompletionQueue {
+    friend class RcQueuePair;
+
+  private:
+    ibv_cq* inner;
+
+    Arc<Context> context_;
+
+    CompletionQueue(Arc<Context> context, int cqe) noexcept(false);
+
+  public:
+    CompletionQueue() = delete;
+    CompletionQueue(const CompletionQueue&) = delete;
+    CompletionQueue& operator=(const CompletionQueue&) = delete;
+
+    ~CompletionQueue();
+
+    static Arc<CompletionQueue> create(Arc<Context> context, int cqe = 128) noexcept(false);
+};
+
 class RcQueuePair {
     friend class Context;
     friend class MemoryRegion;
@@ -112,8 +126,10 @@ class RcQueuePair {
 
     Arc<ProtectionDomain> pd_;
     Arc<Context> context_;
+    Arc<CompletionQueue> send_cq_;
+    Arc<CompletionQueue> recv_cq_;
 
-    RcQueuePair(Arc<ProtectionDomain> pd) noexcept(false);
+    RcQueuePair(Arc<ProtectionDomain> pd, Arc<CompletionQueue> send_cq, Arc<CompletionQueue> recv_cq) noexcept(false);
 
   public:
     RcQueuePair() = delete;
@@ -125,6 +141,8 @@ class RcQueuePair {
     static Box<RcQueuePair> create(const char* dev_name) noexcept(false);
     static Box<RcQueuePair> create(Arc<Context> context) noexcept(false);
     static Box<RcQueuePair> create(Arc<ProtectionDomain> pd) noexcept(false);
+    static Box<RcQueuePair>
+    create(Arc<ProtectionDomain> pd, Arc<CompletionQueue> send_cq, Arc<CompletionQueue> recv_cq) noexcept(false);
 
     inline Arc<ProtectionDomain> get_pd() const {
         return this->pd_;
@@ -134,7 +152,7 @@ class RcQueuePair {
         return this->context_;
     }
 
-    QueuePairState query_qp_state() noexcept(false);
+    ibv_qp_state query_qp_state() noexcept(false);
 
     HandshakeData get_handshake_data() noexcept(false);
 
@@ -245,6 +263,9 @@ class RcQueuePair {
      * @param polled_wcs return value to store the polled wr_ids and status
      */
     int poll_recv_cq_once(const int max_num_wcs, ibv_wc* wc_buffer, std::vector<WorkCompletion>& polled_wcs);
+
+    int poll_send_cq_once(const int max_num_wcs, std::vector<ibv_wc>& polled_wcs);
+    int poll_recv_cq_once(const int max_num_wcs, std::vector<ibv_wc>& polled_wcs);
 };
 
 class MemoryRegion {

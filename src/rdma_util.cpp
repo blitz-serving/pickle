@@ -15,6 +15,8 @@
 #include <utility>
 #include <vector>
 
+#include "pickle_logger.h"
+
 namespace rdma_util {
 
 #define ASSERT(expr, msg) \
@@ -58,6 +60,7 @@ Context::~Context() {
 }
 
 Box<Context> Context::create(const char* dev_name) noexcept(false) {
+    DEBUG("Creating context for device: {}", dev_name);
     return Box<Context>(new Context(dev_name));
 }
 
@@ -79,25 +82,35 @@ ProtectionDomain::~ProtectionDomain() {
     }
 }
 
-RcQueuePair::RcQueuePair(Arc<ProtectionDomain> pd) noexcept(false) {
-    this->pd_ = pd;
-    this->context_ = pd->context_;
-    auto send_cq = ibv_create_cq(context_->inner, 128, nullptr, nullptr, 0);
-    auto recv_cq = ibv_create_cq(context_->inner, 128, nullptr, nullptr, 0);
-
-    if (send_cq == nullptr || recv_cq == nullptr) {
-        if (send_cq) {
-            ibv_destroy_cq(send_cq);
-        }
-        if (recv_cq) {
-            ibv_destroy_cq(recv_cq);
-        }
+CompletionQueue::CompletionQueue(Arc<Context> context, int cqe) noexcept(false) {
+    this->context_ = context;
+    this->inner = ibv_create_cq(context->inner, cqe, nullptr, nullptr, 0);
+    if (this->inner == nullptr) {
         throw std::runtime_error("Failed to create completion queue");
     }
+}
+
+CompletionQueue::~CompletionQueue() {
+    if (this->inner) {
+        ibv_destroy_cq(this->inner);
+    }
+}
+
+Arc<CompletionQueue> CompletionQueue::create(Arc<Context> context, int cqe) {
+    return Arc<CompletionQueue>(new CompletionQueue(context, cqe));
+}
+
+RcQueuePair::RcQueuePair(Arc<ProtectionDomain> pd, Arc<CompletionQueue> send_cq, Arc<CompletionQueue> recv_cq) noexcept(
+    false
+) {
+    this->pd_ = pd;
+    this->context_ = pd->context_;
+    this->send_cq_ = send_cq;
+    this->recv_cq_ = recv_cq;
 
     ibv_qp_init_attr init_attr {};
-    init_attr.send_cq = send_cq;
-    init_attr.recv_cq = recv_cq;
+    init_attr.send_cq = send_cq->inner;
+    init_attr.recv_cq = recv_cq->inner;
     init_attr.cap.max_send_wr = 128;
     init_attr.cap.max_recv_wr = 1024;
     init_attr.cap.max_send_sge = 1;
@@ -107,50 +120,46 @@ RcQueuePair::RcQueuePair(Arc<ProtectionDomain> pd) noexcept(false) {
     init_attr.sq_sig_all = 0;
 
     this->inner = ibv_create_qp(pd->inner, &init_attr);
-    if (this->inner == nullptr) {
-        ibv_destroy_cq(send_cq);
-        ibv_destroy_cq(recv_cq);
-        throw std::runtime_error("Failed to create queue pair");
-    }
 }
 
 Box<RcQueuePair> RcQueuePair::create(const char* dev_name) noexcept(false) {
-    return Box<RcQueuePair>(new RcQueuePair(ProtectionDomain::create(Context::create(dev_name))));
+    Arc<Context> context = Context::create(dev_name);
+    auto send_cq = CompletionQueue::create(context);
+    auto recv_cq = CompletionQueue::create(context);
+    return Box<RcQueuePair>(new RcQueuePair(ProtectionDomain::create(context), send_cq, recv_cq));
 }
 
 Box<RcQueuePair> RcQueuePair::create(Arc<Context> context) noexcept(false) {
-    return Box<RcQueuePair>(new RcQueuePair(ProtectionDomain::create(context)));
+    auto send_cq = CompletionQueue::create(context);
+    auto recv_cq = CompletionQueue::create(context);
+    return Box<RcQueuePair>(new RcQueuePair(ProtectionDomain::create(context), send_cq, recv_cq));
 }
 
 Box<RcQueuePair> RcQueuePair::create(Arc<ProtectionDomain> pd) noexcept(false) {
-    return Box<RcQueuePair>(new RcQueuePair(pd));
+    auto send_cq = CompletionQueue::create(pd->get_context());
+    auto recv_cq = CompletionQueue::create(pd->get_context());
+    return Box<RcQueuePair>(new RcQueuePair(pd, send_cq, recv_cq));
+}
+
+Box<RcQueuePair>
+RcQueuePair::create(Arc<ProtectionDomain> pd, Arc<CompletionQueue> send_cq, Arc<CompletionQueue> recv_cq) noexcept(false
+) {
+    return Box<RcQueuePair>(new RcQueuePair(pd, send_cq, recv_cq));
 }
 
 RcQueuePair::~RcQueuePair() {
     if (this->inner) {
-        ibv_destroy_cq(this->inner->send_cq);
-        ibv_destroy_cq(this->inner->recv_cq);
         ibv_destroy_qp(this->inner);
     }
 }
 
-QueuePairState RcQueuePair::query_qp_state() noexcept(false) {
+ibv_qp_state RcQueuePair::query_qp_state() noexcept(false) {
     ibv_qp_attr attr;
     ibv_qp_init_attr init_attr;
     if (ibv_query_qp(this->inner, &attr, ibv_qp_attr_mask::IBV_QP_STATE, &init_attr)) {
         throw std::runtime_error("Failed to query QP state");
-    }
-    switch (attr.qp_state) {
-        case ibv_qp_state::IBV_QPS_RESET:
-            return QueuePairState::RESET;
-        case ibv_qp_state::IBV_QPS_INIT:
-            return QueuePairState::INIT;
-        case ibv_qp_state::IBV_QPS_RTR:
-            return QueuePairState::RTR;
-        case ibv_qp_state::IBV_QPS_RTS:
-            return QueuePairState::RTS;
-        default:
-            return QueuePairState::UNKNOWN;
+    } else {
+        return attr.qp_state;
     }
 }
 
@@ -570,6 +579,17 @@ int RcQueuePair::poll_send_cq_once(const int max_num_wcs, ibv_wc* wc_buffer, std
     return ret;
 }
 
+int RcQueuePair::poll_send_cq_once(const int max_num_wcs, std::vector<ibv_wc>& polled_wcs) {
+    polled_wcs.resize(max_num_wcs);
+    int ret = ibv_poll_cq(this->inner->send_cq, max_num_wcs, polled_wcs.data());
+    if (ret < 0) {
+        polled_wcs.clear();
+    } else {
+        polled_wcs.resize(ret);
+    }
+    return ret;
+}
+
 int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, ibv_wc* wc_buffer, std::vector<WorkCompletion>& polled_wcs) {
     if (polled_wcs.size() > 0) {
         polled_wcs.clear();
@@ -591,6 +611,17 @@ int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, ibv_wc* wc_buffer, std
         }
     }
 
+    return ret;
+}
+
+int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, std::vector<ibv_wc>& polled_wcs) {
+    polled_wcs.resize(max_num_wcs);
+    int ret = ibv_poll_cq(this->inner->recv_cq, max_num_wcs, polled_wcs.data());
+    if (ret < 0) {
+        polled_wcs.clear();
+    } else {
+        polled_wcs.resize(ret);
+    }
     return ret;
 }
 

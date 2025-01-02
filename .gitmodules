@@ -4,3 +4,6 @@
 [submodule "third_party/concurrentqueue"]
 	path = third_party/concurrentqueue
 	url = https://github.com/cameron314/concurrentqueue.git
+[submodule "third_party/fmt"]
+	path = third_party/fmt
+	url = https://github.com/fmtlib/fmt.git

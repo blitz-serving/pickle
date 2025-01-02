@@ -12,6 +12,7 @@ option(BUILD_BENCHMARKS "Build benchmarks" ON)
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 
 # Add third-party libraries
+add_subdirectory(third_party/fmt)
 add_subdirectory(third_party/concurrentqueue)
 
 if(BUILD_TESTS)
@@ -74,7 +75,7 @@ if(BUILD_BENCHMARKS)
     foreach(BENCHMARK_SOURCE ${BENCHMARK_SOURCES})
         get_filename_component(BENCHMARK_NAME ${BENCHMARK_SOURCE} NAME_WE)
         add_executable(${BENCHMARK_NAME} ${BENCHMARK_SOURCE})
-        target_link_libraries(${BENCHMARK_NAME} rdma_util gpu_mem_util pthread)
+        target_link_libraries(${BENCHMARK_NAME} rdma_util pickle gpu_mem_util pthread)
     endforeach()
 endif()
 

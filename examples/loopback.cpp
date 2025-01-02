@@ -14,7 +14,7 @@ int main() {
         auto mr = rdma_util::MemoryRegion::create(qp->get_pd(), buffer, size);
         qp->bring_up(qp->get_handshake_data());
 
-        if (qp->query_qp_state() != rdma_util::QueuePairState::RTS) {
+        if (qp->query_qp_state() != ibv_qp_state::IBV_QPS_RTS) {
             printf("qp1 is not in RTS state\n");
             return 1;
         }

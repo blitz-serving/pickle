@@ -15,7 +15,11 @@
 
 namespace pickle {
 
-using namespace rdma_util;
+using rdma_util::MemoryRegion;
+using rdma_util::RcQueuePair;
+using rdma_util::WorkCompletion;
+
+const uint64_t kMagic = 32;
 
 template<typename T>
 using Queue = moodycamel::ConcurrentQueue<T>;
@@ -67,10 +71,7 @@ class Handle {
 
 class PickleSender {
   private:
-    uint64_t dop_;
-    uint64_t chunk_size_;
-    uint64_t wr_list_capacity_;
-    uint64_t send_wr_list_index_;
+    uint32_t packet_size_;
 
     std::queue<Ticket> remote_recv_request_queue_;
     Queue<Command> send_request_command_queue_;
@@ -79,13 +80,12 @@ class PickleSender {
     MultiMap<std::shared_ptr<std::atomic<bool>>> pending_local_send_flag_map_;
 
     std::shared_ptr<RcQueuePair> qp_;
+    uint64_t wr_occupied_;
     std::vector<ibv_send_wr> send_wr_list_;
     std::vector<ibv_sge> send_sge_list_;
 
-    std::vector<ibv_wc> send_ibv_wc_buffer_;
-    std::vector<WorkCompletion> polled_send_wcs_;
-    std::vector<ibv_wc> recv_ibv_wc_buffer_;
-    std::vector<WorkCompletion> polled_recv_wcs_;
+    std::vector<ibv_wc> polled_send_wcs_;
+    std::vector<ibv_wc> polled_recv_wcs_;
 
     std::unique_ptr<MemoryRegion> host_recv_buffer_;
     uint64_t recv_buffer_addr_;
@@ -98,7 +98,8 @@ class PickleSender {
     PickleSender& operator=(PickleSender&&) = delete;
 
   public:
-    static std::shared_ptr<PickleSender> create(std::unique_ptr<RcQueuePair> qp, uint64_t dop = 16) noexcept(false);
+    static std::shared_ptr<PickleSender>
+    create(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size = 256 * 1024) noexcept(false);
 
     [[nodiscard]] Handle send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
 
@@ -111,24 +112,21 @@ class PickleSender {
     void poll() noexcept(false);
 
   private:
-    PickleSender(std::unique_ptr<RcQueuePair> qp, uint64_t dop, uint64_t chunk_size = 256 * 1024) :
-        dop_(dop),
+    PickleSender(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size) :
         qp_(std::move(qp)),
-        chunk_size_(chunk_size),
-        send_ibv_wc_buffer_(dop),
-        recv_ibv_wc_buffer_(dop),
-        wr_list_capacity_(dop),
-        send_wr_list_index_(0),
-        send_wr_list_(dop),
-        send_sge_list_(dop) {
+        packet_size_(packet_size),
+        wr_occupied_(0) {
+        this->send_wr_list_.resize(kMagic);
+        this->send_sge_list_.resize(kMagic);
+
         this->host_recv_buffer_ = MemoryRegion::create(
             this->qp_->get_pd(),
-            std::shared_ptr<void>(new Ticket[dop], [](Ticket* p) { delete[] p; }),
-            sizeof(Ticket) * dop
+            std::shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
+            sizeof(Ticket) * kMagic
         );
         this->recv_buffer_addr_ = uint64_t(this->host_recv_buffer_->get_addr());
         this->recv_buffer_lkey_ = this->host_recv_buffer_->get_lkey();
-        for (uint64_t wr_id = 0; wr_id < dop; ++wr_id) {
+        for (uint64_t wr_id = 0; wr_id < kMagic; ++wr_id) {
             this->qp_->post_recv(
                 wr_id,
                 this->recv_buffer_addr_ + wr_id * sizeof(Ticket),
@@ -141,7 +139,6 @@ class PickleSender {
 
 class PickleRecver {
   private:
-    uint64_t dop_;
     uint64_t count_pending_requests_;
     std::queue<Ticket> pending_local_recv_request_queue_;
     std::queue<uint64_t> free_slots;
@@ -149,10 +146,8 @@ class PickleRecver {
     MultiMap<std::shared_ptr<std::atomic<bool>>> pending_local_recv_request_map_;
 
     std::shared_ptr<RcQueuePair> qp_;
-    std::vector<ibv_wc> send_ibv_wc_buffer_;
-    std::vector<WorkCompletion> polled_send_wcs_;
-    std::vector<ibv_wc> recv_ibv_wc_buffer_;
-    std::vector<WorkCompletion> polled_recv_wcs_;
+    std::vector<ibv_wc> polled_send_wcs_;
+    std::vector<ibv_wc> polled_recv_wcs_;
 
     std::unique_ptr<MemoryRegion> host_send_buffer_;
     uint64_t send_buffer_addr_;
@@ -169,7 +164,7 @@ class PickleRecver {
     PickleRecver& operator=(PickleRecver&&) = delete;
 
   public:
-    static std::shared_ptr<PickleRecver> create(std::unique_ptr<RcQueuePair> qp, uint64_t dop = 16) noexcept(false);
+    static std::shared_ptr<PickleRecver> create(std::unique_ptr<RcQueuePair> qp) noexcept(false);
 
     [[nodiscard]] Handle recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);
 
@@ -182,29 +177,28 @@ class PickleRecver {
     void poll() noexcept(false);
 
   private:
-    PickleRecver(std::unique_ptr<RcQueuePair> qp, uint64_t dop) :
-        dop_(dop),
+    PickleRecver(std::unique_ptr<RcQueuePair> qp) :
         count_pending_requests_(0),
         qp_(std::move(qp)),
-        send_ibv_wc_buffer_(dop),
-        recv_ibv_wc_buffer_(dop) {
+        polled_send_wcs_(kMagic),
+        polled_recv_wcs_(kMagic) {
         this->host_send_buffer_ = MemoryRegion::create(
             this->qp_->get_pd(),
-            std::shared_ptr<void>(new Ticket[dop], [](Ticket* p) { delete[] p; }),
-            sizeof(Ticket) * dop
+            std::shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
+            sizeof(Ticket) * kMagic
         );
         this->send_buffer_addr_ = uint64_t(this->host_send_buffer_->get_addr());
         this->send_buffer_lkey_ = this->host_send_buffer_->get_lkey();
 
         this->host_recv_buffer_ = MemoryRegion::create(
             this->qp_->get_pd(),
-            std::shared_ptr<void>(new Ticket[dop], [](Ticket* p) { delete[] p; }),
-            sizeof(Ticket) * dop
+            std::shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
+            sizeof(Ticket) * kMagic
         );
         this->recv_buffer_addr_ = uint64_t(this->host_recv_buffer_->get_addr());
         this->recv_buffer_lkey_ = this->host_recv_buffer_->get_lkey();
 
-        for (uint64_t wr_id = 0; wr_id < dop; ++wr_id) {
+        for (uint64_t wr_id = 0; wr_id < kMagic; ++wr_id) {
             this->free_slots.push(wr_id);
         }
     }
