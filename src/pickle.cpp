@@ -1,6 +1,7 @@
 #include "pickle.h"
 
 #include <infiniband/verbs.h>
+#include <netinet/in.h>
 
 #include <cstdint>
 #include <memory>
@@ -8,12 +9,6 @@
 #include "pickle_logger.h"
 
 namespace pickle {
-
-#define ASSERT(expr, msg) \
-    if (!(expr)) { \
-        ERROR("Assertion failed: %s:%d %s\n", __FILE__, __LINE__, msg); \
-        throw std::runtime_error(std::string("Assertion failed: ") + msg); \
-    }
 
 std::shared_ptr<PickleSender> PickleSender::create(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false
 ) {
@@ -27,7 +22,9 @@ Handle PickleSender::send(uint32_t stream_id, uint64_t addr, uint32_t length, ui
     ticket.addr = addr;
     ticket.length = length;
     ticket.key = lkey;
-    Command command = std::make_tuple(ticket, flag);
+    Command command {};
+    command.ticket = ticket;
+    command.flag = flag;
     this->send_request_command_queue_.enqueue(command);
     return Handle(flag);
 }
@@ -35,11 +32,13 @@ Handle PickleSender::send(uint32_t stream_id, uint64_t addr, uint32_t length, ui
 void PickleSender::poll() noexcept(false) {
     int ret = this->qp_->poll_recv_cq_once(kMagic, this->polled_recv_wcs_);
 
-    ASSERT(ret >= 0, "Failed to poll recv CQ");
+    PICKLE_ASSERT(ret >= 0);
     for (const auto& wc : this->polled_recv_wcs_) {
-        ASSERT(
+        PICKLE_ASSERT(
             wc.status == ibv_wc_status::IBV_WC_SUCCESS && wc.opcode == ibv_wc_opcode::IBV_WC_RECV,
-            "Failed to receive data"
+            "Failed to receive data: status={}, opcode={}",
+            int(wc.status),
+            int(wc.opcode)
         );
         auto wr_id = wc.wr_id;
         Ticket ticket {};
@@ -59,8 +58,8 @@ void PickleSender::poll() noexcept(false) {
     // Received from send request
     uint64_t count_dequeued = this->send_request_command_queue_.try_dequeue_bulk(commands.begin(), kMagic);
     for (uint64_t i = 0; i < count_dequeued; ++i) {
-        auto ticket = std::get<0>(commands[i]);
-        auto flag = std::get<1>(commands[i]);
+        auto ticket = commands[i].ticket;
+        auto flag = commands[i].flag;
         this->pending_local_send_request_map_[ticket.stream_id].push(ticket);
         this->pending_local_send_flag_map_[ticket.stream_id].push(flag);
     }
@@ -105,11 +104,11 @@ void PickleSender::poll() noexcept(false) {
             uint32_t llength = local_send_request.length;
             uint32_t lkey = local_send_request.key;
 
-            ASSERT(rlength == llength, "Length mismatch");
+            PICKLE_ASSERT(rlength == llength, "Length mismatch");
 
             uint32_t write_size;
             ibv_wr_opcode opcode;
-            uint64_t wr_id = 0;
+            uint64_t wr_id;
 
             if (llength <= this->packet_size_) {
                 // The last packet of the request
@@ -137,6 +136,7 @@ void PickleSender::poll() noexcept(false) {
             this->send_wr_list_[wr_list_index] = {};
             this->send_wr_list_[wr_list_index].wr_id = wr_id;
             this->send_wr_list_[wr_list_index].opcode = opcode;
+            this->send_wr_list_[wr_list_index].imm_data = htonl(stream_id);
             this->send_wr_list_[wr_list_index].wr.rdma.remote_addr = raddr;
             this->send_wr_list_[wr_list_index].wr.rdma.rkey = rkey;
             this->send_wr_list_[wr_list_index].sg_list = &(this->send_sge_list_[wr_list_index]);
@@ -161,19 +161,21 @@ void PickleSender::poll() noexcept(false) {
     }
 
     if (this->wr_occupied_ > wr_list_start) {
-        DEBUG("Posting {} work requests", this->wr_occupied_ - wr_list_start);
+        TRACE("Posting {} work requests", this->wr_occupied_ - wr_list_start);
         this->qp_->post_send_wrs(&(this->send_wr_list_[wr_list_start]));
     }
 
     ret = this->qp_->poll_send_cq_once(kMagic, this->polled_send_wcs_);
 
-    ASSERT(ret >= 0, "Failed to poll send CQ");
+    PICKLE_ASSERT(ret >= 0, "Failed to poll send CQ");
     if (ret > 0) {
-        DEBUG("Polled {} signaled work completions", ret);
+        TRACE("Polled {} signaled work completions", ret);
         for (const auto& wc : this->polled_send_wcs_) {
-            ASSERT(
+            PICKLE_ASSERT(
                 wc.status == ibv_wc_status::IBV_WC_SUCCESS && wc.opcode == ibv_wc_opcode::IBV_WC_RDMA_WRITE,
-                "Op write_with_imm failed"
+                "Op write_with_imm failed: status={}, opcode={}",
+                int(wc.status),
+                int(wc.opcode)
             );
             uint64_t wr_id = wc.wr_id;
             uint16_t doorbell_length = (wr_id >> 32) & 0xFFFF;
@@ -188,8 +190,8 @@ void PickleSender::poll() noexcept(false) {
     }
 }
 
-std::shared_ptr<PickleRecver> PickleRecver::create(std::unique_ptr<RcQueuePair> qp) noexcept(false) {
-    return std::shared_ptr<PickleRecver>(new PickleRecver(std::move(qp)));
+std::shared_ptr<PickleRecver> PickleRecver::create(std::unique_ptr<RcQueuePair> qp, bool flush) noexcept(false) {
+    return std::shared_ptr<PickleRecver>(new PickleRecver(std::move(qp), flush));
 }
 
 Handle PickleRecver::recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey) {
@@ -199,7 +201,9 @@ Handle PickleRecver::recv(uint32_t stream_id, uint64_t addr, uint32_t length, ui
     ticket.addr = addr;
     ticket.length = length;
     ticket.key = rkey;
-    Command command = std::make_tuple(ticket, flag);
+    Command command {};
+    command.ticket = ticket;
+    command.flag = flag;
     this->recv_request_command_queue_.enqueue(command);
     return Handle(flag);
 }
@@ -210,10 +214,8 @@ void PickleRecver::poll() noexcept(false) {
 
     uint64_t count_dequeued = this->recv_request_command_queue_.try_dequeue_bulk(commands.begin(), kMagic);
     for (uint64_t i = 0; i < count_dequeued; ++i) {
-        auto ticket = std::get<0>(commands[i]);
-        auto flag = std::get<1>(commands[i]);
-        this->pending_local_recv_request_map_[ticket.stream_id].push(flag);
-        this->pending_local_recv_request_queue_.push(ticket);
+        this->pending_local_recv_request_map_[commands[i].ticket.stream_id].push(commands[i]);
+        this->pending_local_recv_request_queue_.push(commands[i].ticket);
         this->count_pending_requests_++;
     }
 
@@ -238,35 +240,69 @@ void PickleRecver::poll() noexcept(false) {
         );
     }
 
-    if (this->count_pending_requests_ == 0) {
-        return;
-    }
-
     int ret;
     ret = this->qp_->poll_send_cq_once(kMagic, this->polled_send_wcs_);
 
-    ASSERT(ret >= 0, "Failed to poll send CQ");
+    PICKLE_ASSERT(ret >= 0, "Failed to poll send CQ");
     for (const auto& wc : this->polled_send_wcs_) {
-        ASSERT(
+        PICKLE_ASSERT(
             wc.status == ibv_wc_status::IBV_WC_SUCCESS && wc.opcode == ibv_wc_opcode::IBV_WC_SEND,
-            "Op post_send_send failed"
+            "Op post_send_send failed: status={}, opcode={}",
+            int(wc.status),
+            int(wc.opcode)
         );
     }
 
     ret = this->qp_->poll_recv_cq_once(kMagic, this->polled_recv_wcs_);
 
-    ASSERT(ret >= 0, "Failed to poll recv CQ");
+    PICKLE_ASSERT(ret >= 0, "Failed to poll recv CQ");
     for (const auto& wc : this->polled_recv_wcs_) {
-        ASSERT(
+        PICKLE_ASSERT(
             wc.status == ibv_wc_status::IBV_WC_SUCCESS && wc.opcode == ibv_wc_opcode::IBV_WC_RECV_RDMA_WITH_IMM,
-            "Failed to receive data"
+            "Failed to receive data: status={}, opcode={}",
+            int(wc.status),
+            int(wc.opcode)
         );
-        auto wr_id = wc.wr_id;
-        std::queue<std::shared_ptr<std::atomic<bool>>>& queue = this->pending_local_recv_request_map_[wc.imm_data];
-        queue.front()->store(true);
+        uint32_t stream_id = ntohl(wc.imm_data);
+        TRACE("Received data from stream {}", stream_id);
+
+        std::queue<Command>& queue = this->pending_local_recv_request_map_[stream_id];
+        Command command = queue.front();
         queue.pop();
         this->count_pending_requests_--;
         this->free_slots.push(wc.wr_id);
+
+        // Post-process
+        if (this->flush_) {
+            this->loopback_queue_.push(command.flag);
+            this->loopback_qp_->post_send_read(
+                0,
+                uint64_t(this->loopback_buffer_->get_addr()),
+                command.ticket.addr,
+                8,
+                this->loopback_buffer_->get_lkey(),
+                command.ticket.key,
+                true
+            );
+        } else {
+            command.flag->store(true);
+        }
+    }
+
+    if (this->flush_) {
+        ret = this->loopback_qp_->poll_send_cq_once(kMagic, this->polled_send_wcs_);
+
+        PICKLE_ASSERT(ret >= 0, "Failed to poll loopback send CQ");
+        for (const auto& wc : this->polled_send_wcs_) {
+            PICKLE_ASSERT(
+                wc.status == ibv_wc_status::IBV_WC_SUCCESS && wc.opcode == ibv_wc_opcode::IBV_WC_RDMA_READ,
+                "Op post_send_read failed: status={}, opcode={}",
+                int(wc.status),
+                int(wc.opcode)
+            );
+            this->loopback_queue_.front()->store(true);
+            this->loopback_queue_.pop();
+        }
     }
 }
 

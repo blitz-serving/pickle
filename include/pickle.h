@@ -3,21 +3,27 @@
 
 #include <infiniband/verbs.h>
 
+#include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <memory>
 #include <queue>
 #include <sstream>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "concurrentqueue.h"
 #include "rdma_util.h"
 
 namespace pickle {
 
-using rdma_util::MemoryRegion;
-using rdma_util::RcQueuePair;
-using rdma_util::WorkCompletion;
+using ::rdma_util::CompletionQueue;
+using ::rdma_util::MemoryRegion;
+using ::rdma_util::ProtectionDomain;
+using ::rdma_util::RcQueuePair;
+using ::rdma_util::WorkCompletion;
 
 const uint64_t kMagic = 32;
 
@@ -38,16 +44,21 @@ struct Ticket {
     }
 };
 
-using Command = std::tuple<Ticket, std::shared_ptr<std::atomic<bool>>>;
+// using Command = std::tuple<Ticket, std::shared_ptr<std::atomic<bool>>>;
+
+struct Command {
+    Ticket ticket;
+    std::shared_ptr<std::atomic<bool>> flag;
+};
 
 template<typename T>
 using MultiMap = std::map<uint32_t, std::queue<T>>;
 
 class Handle {
-  private:
+private:
     std::shared_ptr<std::atomic<bool>> finished_;
 
-  public:
+public:
     Handle() : finished_(std::make_shared<std::atomic<bool>>(true)) {}
 
     Handle(const std::shared_ptr<std::atomic<bool>>& finished) : finished_(finished) {}
@@ -70,7 +81,7 @@ class Handle {
 };
 
 class PickleSender {
-  private:
+private:
     uint32_t packet_size_;
 
     std::queue<Ticket> remote_recv_request_queue_;
@@ -97,7 +108,7 @@ class PickleSender {
     PickleSender(PickleSender&&) = delete;
     PickleSender& operator=(PickleSender&&) = delete;
 
-  public:
+public:
     static std::shared_ptr<PickleSender>
     create(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size = 256 * 1024) noexcept(false);
 
@@ -111,7 +122,7 @@ class PickleSender {
      */
     void poll() noexcept(false);
 
-  private:
+private:
     PickleSender(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size) :
         qp_(std::move(qp)),
         packet_size_(packet_size),
@@ -138,12 +149,12 @@ class PickleSender {
 };
 
 class PickleRecver {
-  private:
+private:
     uint64_t count_pending_requests_;
     std::queue<Ticket> pending_local_recv_request_queue_;
     std::queue<uint64_t> free_slots;
     Queue<Command> recv_request_command_queue_;
-    MultiMap<std::shared_ptr<std::atomic<bool>>> pending_local_recv_request_map_;
+    MultiMap<Command> pending_local_recv_request_map_;
 
     std::shared_ptr<RcQueuePair> qp_;
     std::vector<ibv_wc> polled_send_wcs_;
@@ -157,14 +168,20 @@ class PickleRecver {
     uint64_t recv_buffer_addr_;
     uint32_t recv_buffer_lkey_;
 
+    // Loopback qp used to flush data
+    bool flush_;
+    std::unique_ptr<RcQueuePair> loopback_qp_;
+    std::unique_ptr<MemoryRegion> loopback_buffer_;
+    std::queue<std::shared_ptr<std::atomic<bool>>> loopback_queue_;
+
     PickleRecver() = delete;
     PickleRecver(const PickleRecver&) = delete;
     PickleRecver& operator=(const PickleRecver&) = delete;
     PickleRecver(PickleRecver&&) = delete;
     PickleRecver& operator=(PickleRecver&&) = delete;
 
-  public:
-    static std::shared_ptr<PickleRecver> create(std::unique_ptr<RcQueuePair> qp) noexcept(false);
+public:
+    static std::shared_ptr<PickleRecver> create(std::unique_ptr<RcQueuePair> qp, bool flush = true) noexcept(false);
 
     [[nodiscard]] Handle recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);
 
@@ -176,12 +193,20 @@ class PickleRecver {
      */
     void poll() noexcept(false);
 
-  private:
-    PickleRecver(std::unique_ptr<RcQueuePair> qp) :
+private:
+    /**
+     * @brief Construct a new PickleRecver object
+     * 
+     * @param qp Connected Queue Pair as the transport layer
+     * @param flush Whether to read first byte from GPU to CPU through RDMA
+     * after the completion of remote PickleSender
+     */
+    PickleRecver(std::unique_ptr<RcQueuePair> qp, bool flush) noexcept(false) :
         count_pending_requests_(0),
         qp_(std::move(qp)),
         polled_send_wcs_(kMagic),
-        polled_recv_wcs_(kMagic) {
+        polled_recv_wcs_(kMagic),
+        flush_(flush) {
         this->host_send_buffer_ = MemoryRegion::create(
             this->qp_->get_pd(),
             std::shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
@@ -200,6 +225,20 @@ class PickleRecver {
 
         for (uint64_t wr_id = 0; wr_id < kMagic; ++wr_id) {
             this->free_slots.push(wr_id);
+        }
+
+        if (this->flush_) {
+            auto cq = CompletionQueue::create(this->qp_->get_context());
+            auto loopback_qp = RcQueuePair::create(this->qp_->get_pd(), cq, cq);
+            loopback_qp->bring_up(loopback_qp->get_handshake_data());
+            auto loopback_buffer = MemoryRegion::create(
+                loopback_qp->get_pd(),
+                std::shared_ptr<void>(new uint64_t[16], [](uint64_t* p) { delete[] p; }),
+                sizeof(uint64_t) * 16
+            );
+
+            this->loopback_qp_ = std::move(loopback_qp);
+            this->loopback_buffer_ = std::move(loopback_buffer);
         }
     }
 };

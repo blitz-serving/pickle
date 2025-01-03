@@ -19,12 +19,6 @@
 
 namespace rdma_util {
 
-#define ASSERT(expr, msg) \
-    if (!(expr)) { \
-        printf("Assertion failed: %s:%d %s\n", __FILE__, __LINE__, msg); \
-        throw std::runtime_error(std::string("Assertion failed: ") + msg); \
-    }
-
 Context::Context(const char* dev_name) noexcept(false) {
     auto dev_list = ibv_get_device_list(nullptr);
     if (!dev_list) {
@@ -196,13 +190,12 @@ void RcQueuePair::bring_up(const HandshakeData& handshake_data, ibv_rate rate) n
         ibv_qp_attr attr;
         ibv_qp_init_attr init_attr;
         int ret = ibv_query_qp(this->inner, &attr, mask, &init_attr);
-        if (ret) {
-            throw std::runtime_error("Failed to query QP state");
-        } else if (attr.qp_state == ibv_qp_state::IBV_QPS_RTS) {
-            printf("[warn] QP state is already RTS\n");
+        PICKLE_ASSERT(ret == 0, "Failed to query QP state");
+        if (attr.qp_state == ibv_qp_state::IBV_QPS_RTS) {
+            WARN("QP state is already RTS");
             return;
-        } else if (attr.qp_state != ibv_qp_state::IBV_QPS_RESET) {
-            throw std::runtime_error("QP state is not RESET");
+        } else {
+            PICKLE_ASSERT(attr.qp_state == ibv_qp_state::IBV_QPS_RESET, "QP state is not RESET");
         }
     }
 
@@ -790,7 +783,7 @@ void TcclContext::poll_both_inner() noexcept(false) {
 }
 
 void TcclContext::poll_send_one_round_inner() noexcept(false) {
-    ASSERT(this->send_ibv_wc_buffer_.size() > 0, "WC buffer is empty");
+    PICKLE_ASSERT(this->send_ibv_wc_buffer_.size() > 0, "WC buffer is empty");
 
     std::vector<Command> commands(this->dop_);
     std::vector<Ticket> tickets(this->dop_);
@@ -892,7 +885,7 @@ void TcclContext::poll_send_one_round_inner() noexcept(false) {
 }
 
 void TcclContext::poll_recv_one_round_inner() noexcept(false) {
-    ASSERT(this->recv_ibv_wc_buffer_.size() > 0, "WC buffer is empty");
+    PICKLE_ASSERT(this->recv_ibv_wc_buffer_.size() > 0, "WC buffer is empty");
 
     std::vector<Command> commands(this->dop_);
     std::vector<Ticket> tickets(this->dop_);

@@ -55,12 +55,12 @@ class Context {
     friend class RcQueuePair;
     friend class CompletionQueue;
 
-  private:
+private:
     ibv_context* inner;
 
     Context(const char* dev_name) noexcept(false);
 
-  public:
+public:
     Context() = delete;
     Context(const Context&) = delete;
     Context& operator=(const Context&) = delete;
@@ -75,14 +75,14 @@ class ProtectionDomain {
     friend class MemoryRegion;
     friend class RcQueuePair;
 
-  private:
+private:
     ibv_pd* inner;
 
     Arc<Context> context_;
 
     ProtectionDomain(Arc<Context> context) noexcept(false);
 
-  public:
+public:
     ProtectionDomain() = delete;
     ProtectionDomain(const ProtectionDomain&) = delete;
     ProtectionDomain& operator=(const ProtectionDomain&) = delete;
@@ -99,14 +99,14 @@ class ProtectionDomain {
 class CompletionQueue {
     friend class RcQueuePair;
 
-  private:
+private:
     ibv_cq* inner;
 
     Arc<Context> context_;
 
     CompletionQueue(Arc<Context> context, int cqe) noexcept(false);
 
-  public:
+public:
     CompletionQueue() = delete;
     CompletionQueue(const CompletionQueue&) = delete;
     CompletionQueue& operator=(const CompletionQueue&) = delete;
@@ -121,7 +121,7 @@ class RcQueuePair {
     friend class MemoryRegion;
     friend class ProtectionDomain;
 
-  private:
+private:
     ibv_qp* inner;
 
     Arc<ProtectionDomain> pd_;
@@ -131,7 +131,7 @@ class RcQueuePair {
 
     RcQueuePair(Arc<ProtectionDomain> pd, Arc<CompletionQueue> send_cq, Arc<CompletionQueue> recv_cq) noexcept(false);
 
-  public:
+public:
     RcQueuePair() = delete;
     RcQueuePair(const RcQueuePair&) = delete;
     RcQueuePair& operator=(const RcQueuePair&) = delete;
@@ -273,7 +273,7 @@ class MemoryRegion {
     friend class ProtectionDomain;
     friend class RcQueuePair;
 
-  private:
+private:
     ibv_mr* inner;
 
     Arc<ProtectionDomain> pd_;
@@ -286,7 +286,7 @@ class MemoryRegion {
 
     MemoryRegion(Arc<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false);
 
-  public:
+public:
     MemoryRegion() = delete;
     MemoryRegion(const MemoryRegion&) = delete;
     MemoryRegion& operator=(const MemoryRegion&) = delete;
@@ -357,10 +357,10 @@ template<typename T>
 using MultiMap = std::map<uint32_t, std::queue<T>>;
 
 class Handle {
-  private:
+private:
     Arc<std::atomic<bool>> finished_;
 
-  public:
+public:
     Handle() : finished_(std::make_shared<std::atomic<bool>>(true)) {}
 
     Handle(const Arc<std::atomic<bool>>& finished) : finished_(finished) {}
@@ -383,7 +383,7 @@ class Handle {
 };
 
 class TcclContext {
-  private:
+private:
     uint64_t dop_;
 
     Arc<RcQueuePair> qp_;
@@ -433,7 +433,7 @@ class TcclContext {
     void poll_send_one_round_inner() noexcept(false);
     void poll_recv_one_round_inner() noexcept(false);
 
-  public:
+public:
     ~TcclContext();
 
     inline uint64_t get_dop() const {
@@ -473,7 +473,7 @@ class TcclContext {
     [[nodiscard]] Handle send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey, uint32_t padding = 0);
     [[nodiscard]] Handle recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey, uint32_t padding = 0);
 
-  private:
+private:
     TcclContext() = default;
     void initialize(Box<RcQueuePair> qp, uint64_t dop) noexcept(false);
 };

@@ -9,13 +9,17 @@
 #include <cstdarg>
 #include <cstdio>
 
-const int kLogLevelError = 0;
-const int kLogLevelWarn = 1;
-const int kLogLevelInfo = 2;
-const int kLogLevelDebug = 3;
-const int kLogLevelTrace = 4;
+static int get_log_level();
 
-inline int get_log_level() {
+static const int gLogLevelEnv = get_log_level();
+
+static const int kLogLevelError = 0;
+static const int kLogLevelWarn = 1;
+static const int kLogLevelInfo = 2;
+static const int kLogLevelDebug = 3;
+static const int kLogLevelTrace = 4;
+
+static int get_log_level() {
     const char* log_level = std::getenv("PICKLE_LOG_LEVEL");
     if (log_level == nullptr) {
         return kLogLevelInfo;
@@ -42,80 +46,91 @@ inline int get_log_level() {
     }
 }
 
-static int gEnvLogLevel = get_log_level();
-
-#define TRACE(f, ...) \
-    { \
-        if (gEnvLogLevel >= kLogLevelTrace) { \
-            ::fmt::println( \
+#define TRACE(f, ...)                              \
+    {                                              \
+        if (gLogLevelEnv >= kLogLevelTrace) {      \
+            ::fmt::println(                        \
                 "{:%H:%M:%S} [TRACE]  {} ({}:{})", \
-                std::chrono::system_clock::now(), \
-                _format_valist(f, ##__VA_ARGS__), \
-                __FILE__, \
-                __LINE__ \
-            ); \
-        } \
+                std::chrono::system_clock::now(),  \
+                _pickle_format_(f, ##__VA_ARGS__), \
+                __FILE__,                          \
+                __LINE__                           \
+            );                                     \
+        }                                          \
     }
 
-#define DEBUG(f, ...) \
-    { \
-        if (gEnvLogLevel >= kLogLevelDebug) { \
-            ::fmt::println( \
+#define DEBUG(f, ...)                              \
+    {                                              \
+        if (gLogLevelEnv >= kLogLevelDebug) {      \
+            ::fmt::println(                        \
                 "{:%H:%M:%S} [DEBUG]  {} ({}:{})", \
-                std::chrono::system_clock::now(), \
-                _format_valist(f, ##__VA_ARGS__), \
-                __FILE__, \
-                __LINE__ \
-            ); \
-        } \
+                std::chrono::system_clock::now(),  \
+                _pickle_format_(f, ##__VA_ARGS__), \
+                __FILE__,                          \
+                __LINE__                           \
+            );                                     \
+        }                                          \
     }
 
-#define INFO(f, ...) \
-    { \
-        if (gEnvLogLevel >= kLogLevelInfo) { \
-            ::fmt::println( \
+#define INFO(f, ...)                               \
+    {                                              \
+        if (gLogLevelEnv >= kLogLevelInfo) {       \
+            ::fmt::println(                        \
                 "{:%H:%M:%S} [INFO ]  {} ({}:{})", \
-                std::chrono::system_clock::now(), \
-                _format_valist(f, ##__VA_ARGS__), \
-                __FILE__, \
-                __LINE__ \
-            ); \
-        } \
+                std::chrono::system_clock::now(),  \
+                _pickle_format_(f, ##__VA_ARGS__), \
+                __FILE__,                          \
+                __LINE__                           \
+            );                                     \
+        }                                          \
     }
 
-#define WARN(f, ...) \
-    { \
-        if (gEnvLogLevel >= kLogLevelWarn) { \
-            ::fmt::println( \
+#define WARN(f, ...)                               \
+    {                                              \
+        if (gLogLevelEnv >= kLogLevelWarn) {       \
+            ::fmt::println(                        \
                 "{:%H:%M:%S} [WARN ]  {} ({}:{})", \
-                std::chrono::system_clock::now(), \
-                _format_valist(f, ##__VA_ARGS__), \
-                __FILE__, \
-                __LINE__ \
-            ); \
-        } \
+                std::chrono::system_clock::now(),  \
+                _pickle_format_(f, ##__VA_ARGS__), \
+                __FILE__,                          \
+                __LINE__                           \
+            );                                     \
+        }                                          \
     }
 
-#define ERROR(f, ...) \
-    { \
-        if (gEnvLogLevel >= kLogLevelError) { \
-            ::fmt::println( \
+#define ERROR(f, ...)                              \
+    {                                              \
+        if (gLogLevelEnv >= kLogLevelError) {      \
+            ::fmt::println(                        \
                 "{:%H:%M:%S} [ERROR]  {} ({}:{})", \
-                std::chrono::system_clock::now(), \
-                _format_valist(f, ##__VA_ARGS__), \
-                __FILE__, \
-                __LINE__ \
-            ); \
-        } \
+                std::chrono::system_clock::now(),  \
+                _pickle_format_(f, ##__VA_ARGS__), \
+                __FILE__,                          \
+                __LINE__                           \
+            );                                     \
+        }                                          \
     }
+
+#define PICKLE_ASSERT(expr, ...)                                                                                \
+    {                                                                                                           \
+        if (!(expr)) {                                                                                          \
+            throw std::runtime_error(                                                                           \
+                ::fmt::format("Assertion failed. {} ({}:{})", _pickle_format_(__VA_ARGS__), __FILE__, __LINE__) \
+            );                                                                                                  \
+        }                                                                                                       \
+    }
+
+static inline const char* _pickle_format_() {
+    return "";
+}
 
 template<typename T>
-inline T&& _format_valist(T&& f) {
+static inline T&& _pickle_format_(T&& f) {
     return std::forward<T>(f);
 }
 
 template<typename T, typename... Args>
-inline std::string _format_valist(T&& f, Args&&... args) {
+static inline std::string _pickle_format_(T&& f, Args&&... args) {
     return ::fmt::vformat(f, ::fmt::make_format_args(args...));
 }
 

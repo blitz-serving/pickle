@@ -19,8 +19,8 @@ constexpr uint64_t kDataBufferSize = 75ull * 1024 * 1024 * 1024;
 constexpr const char* kRNIC1 = "mlx5_0";
 constexpr const char* kRNIC2 = "mlx5_0";
 
-constexpr uint32_t kChunkSize = 64ull * 1024 * 1024;
-constexpr uint64_t dop = 256;
+constexpr uint32_t kChunkSize = 1024ull * 1024 * 1024;
+constexpr uint64_t dop = 15;
 constexpr const ibv_rate kRate = ibv_rate::IBV_RATE_MAX;
 
 static std::atomic<uint64_t> bytes_transferred(0);
@@ -34,7 +34,7 @@ void reporter_thread() {
         std::this_thread::sleep_for(std::chrono::seconds(1));
         curr = bytes_transferred.load();
         bandwidth = (curr - prev) / 1024.0 / 1024.0 / 1024.0;
-        printf("Bandwidth: %.2f GB/s\n", bandwidth);
+        INFO("Bandwidth: {} GB/s", bandwidth);
         prev = curr;
         if (recver_exited.load()) {
             return;
@@ -111,11 +111,11 @@ int main() {
     );
 
     auto sender = pickle::PickleSender::create(std::move(qp1));
-    auto recver = pickle::PickleRecver::create(std::move(qp2));
+    auto recver = pickle::PickleRecver::create(std::move(qp2), true);
 
     std::thread reporter(reporter_thread);
-    std::thread thread_s(sender_thread, sender, data_mr1, 0);
-    std::thread thread_r(recver_thread, recver, data_mr2, 0);
+    std::thread thread_s(sender_thread, sender, data_mr1, 20250102);
+    std::thread thread_r(recver_thread, recver, data_mr2, 20250102);
 
     std::thread([sender, recver] {
         while (1) {

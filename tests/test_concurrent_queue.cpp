@@ -4,7 +4,7 @@
 #include <vector>
 
 class Object {
-  public:
+public:
     Object() = default;
     Object(const Object&) = default;
     Object& operator=(const Object&) = default;
