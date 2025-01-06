@@ -106,7 +106,7 @@ int main() {
         kDataBufferSize
     );
 
-    std::shared_ptr<pickle::LoopbackFlusher> flusher = pickle::LoopbackFlusher::create(qp2->get_pd());
+    std::shared_ptr<pickle::Flusher> flusher = pickle::Flusher::create(qp2->get_pd());
 
     auto sender = pickle::PickleSender::create(std::move(qp1));
     auto recver = pickle::PickleRecver::create(std::move(qp2), nullptr);

@@ -223,12 +223,12 @@ void PickleSender::poll() noexcept(false) {
     }
 }
 
-PickleRecver::PickleRecver(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<LoopbackFlusher> flusher) noexcept(false) :
+PickleRecver::PickleRecver(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<Flusher> flusher) noexcept(false) :
     count_pending_requests_(0),
     qp_(std::move(qp)),
     polled_send_wcs_(kMagic),
     polled_recv_wcs_(kMagic),
-    loopback_flusher_(flusher) {
+    flusher_(flusher) {
     this->host_send_buffer_ = MemoryRegion::create(
         this->qp_->get_pd(),
         std::shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
@@ -255,7 +255,7 @@ PickleRecver::~PickleRecver() {
 }
 
 std::shared_ptr<PickleRecver>
-PickleRecver::create(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<LoopbackFlusher> flusher) noexcept(false) {
+PickleRecver::create(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<Flusher> flusher) noexcept(false) {
     return std::shared_ptr<PickleRecver>(new PickleRecver(std::move(qp), flusher));
 }
 
@@ -333,15 +333,15 @@ void PickleRecver::poll() noexcept(false) {
         this->free_slots.push(wc.wr_id);
 
         // Post-process
-        if (this->loopback_flusher_ == nullptr) {
+        if (this->flusher_ == nullptr) {
             command.flag->store(true);
         } else {
-            this->loopback_flusher_->append(command.ticket.key, command.ticket.addr, command.flag);
+            this->flusher_->append(command.ticket.key, command.ticket.addr, command.flag);
         }
     }
 }
 
-LoopbackFlusher::LoopbackFlusher(std::shared_ptr<ProtectionDomain>& pd) noexcept(false) : flush_infos_(16) {
+Flusher::Flusher(std::shared_ptr<ProtectionDomain>& pd) noexcept(false) : flush_infos_(16) {
     std::shared_ptr<rdma_util::CompletionQueue> cq = CompletionQueue::create(pd->get_context());
     this->loopback_qp_ = RcQueuePair::create(pd, cq, cq);
     this->loopback_qp_->bring_up(this->loopback_qp_->get_handshake_data());
@@ -352,15 +352,15 @@ LoopbackFlusher::LoopbackFlusher(std::shared_ptr<ProtectionDomain>& pd) noexcept
     );
 }
 
-LoopbackFlusher::~LoopbackFlusher() {
+Flusher::~Flusher() {
     DEBUG("Destroying LoopbackFlusher");
 }
 
-std::shared_ptr<LoopbackFlusher> LoopbackFlusher::create(std::shared_ptr<ProtectionDomain> pd) noexcept(false) {
-    return std::shared_ptr<LoopbackFlusher>(new LoopbackFlusher(pd));
+std::shared_ptr<Flusher> Flusher::create(std::shared_ptr<ProtectionDomain> pd) noexcept(false) {
+    return std::shared_ptr<Flusher>(new Flusher(pd));
 }
 
-void LoopbackFlusher::append(uint32_t rkey, uint64_t raddr, std::shared_ptr<std::atomic<bool>> flag) {
+void Flusher::append(uint32_t rkey, uint64_t raddr, std::shared_ptr<std::atomic<bool>> flag) {
     FlushInfo info {};
     info.rkey = rkey;
     info.raddr = raddr;
@@ -368,7 +368,7 @@ void LoopbackFlusher::append(uint32_t rkey, uint64_t raddr, std::shared_ptr<std:
     this->info_queue_.enqueue(info);
 }
 
-void LoopbackFlusher::poll() noexcept(false) {
+void Flusher::poll() noexcept(false) {
     if (this->pending_flushes_ > 0) {
         int ret = this->loopback_qp_->poll_send_cq_once(kMagic, this->polled_wcs_);
         PICKLE_ASSERT(ret >= 0);

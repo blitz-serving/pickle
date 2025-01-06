@@ -12,7 +12,7 @@ using namespace rdma_util;
 int main() {
     std::shared_ptr<Context> context = Context::create("mlx5_0");
     std::shared_ptr<ProtectionDomain> pd = ProtectionDomain::create(std::move(context));
-    std::shared_ptr<LoopbackFlusher> flusher = LoopbackFlusher::create(pd);
+    std::shared_ptr<Flusher> flusher = Flusher::create(pd);
     std::shared_ptr<MemoryRegion> mr = MemoryRegion::create(
         pd,
         std::shared_ptr<void>(new uint64_t[16], [](uint64_t* p) { delete[] p; }),

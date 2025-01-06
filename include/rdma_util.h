@@ -52,16 +52,18 @@ class Context {
 private:
     ibv_context* inner;
 
-    Context(const char* dev_name) noexcept(false);
-
-public:
     Context() = delete;
     Context(const Context&) = delete;
     Context& operator=(const Context&) = delete;
+    Context(Context&&) = delete;
+    Context& operator=(Context&&) = delete;
+
+    Context(const char* dev_name) noexcept(false);
+
+public:
+    static std::unique_ptr<Context> create(const char* dev_name) noexcept(false);
 
     ~Context();
-
-    static std::unique_ptr<Context> create(const char* dev_name) noexcept(false);
 };
 
 class ProtectionDomain {
@@ -74,16 +76,18 @@ private:
 
     std::shared_ptr<Context> context_;
 
-    ProtectionDomain(std::shared_ptr<Context> context) noexcept(false);
-
-public:
     ProtectionDomain() = delete;
     ProtectionDomain(const ProtectionDomain&) = delete;
     ProtectionDomain& operator=(const ProtectionDomain&) = delete;
+    ProtectionDomain(ProtectionDomain&&) = delete;
+    ProtectionDomain& operator=(ProtectionDomain&&) = delete;
+
+    ProtectionDomain(std::shared_ptr<Context> context) noexcept(false);
+
+public:
+    static std::unique_ptr<ProtectionDomain> create(std::shared_ptr<Context> context) noexcept(false);
 
     ~ProtectionDomain();
-
-    static std::unique_ptr<ProtectionDomain> create(std::shared_ptr<Context> context) noexcept(false);
 
     inline std::shared_ptr<Context> get_context() const {
         return this->context_;
@@ -98,16 +102,18 @@ private:
 
     std::shared_ptr<Context> context_;
 
-    CompletionQueue(std::shared_ptr<Context> context, int cqe) noexcept(false);
-
-public:
     CompletionQueue() = delete;
     CompletionQueue(const CompletionQueue&) = delete;
     CompletionQueue& operator=(const CompletionQueue&) = delete;
+    CompletionQueue(CompletionQueue&&) = delete;
+    CompletionQueue& operator=(CompletionQueue&&) = delete;
+
+    CompletionQueue(std::shared_ptr<Context> context, int cqe) noexcept(false);
+
+public:
+    static std::shared_ptr<CompletionQueue> create(std::shared_ptr<Context> context, int cqe = 128) noexcept(false);
 
     ~CompletionQueue();
-
-    static std::shared_ptr<CompletionQueue> create(std::shared_ptr<Context> context, int cqe = 128) noexcept(false);
 };
 
 class RcQueuePair {
@@ -123,6 +129,12 @@ private:
     std::shared_ptr<CompletionQueue> send_cq_;
     std::shared_ptr<CompletionQueue> recv_cq_;
 
+    RcQueuePair() = delete;
+    RcQueuePair(const RcQueuePair&) = delete;
+    RcQueuePair& operator=(const RcQueuePair&) = delete;
+    RcQueuePair(RcQueuePair&&) = delete;
+    RcQueuePair& operator=(RcQueuePair&&) = delete;
+
     RcQueuePair(
         std::shared_ptr<ProtectionDomain> pd,
         std::shared_ptr<CompletionQueue> send_cq,
@@ -130,12 +142,6 @@ private:
     ) noexcept(false);
 
 public:
-    RcQueuePair() = delete;
-    RcQueuePair(const RcQueuePair&) = delete;
-    RcQueuePair& operator=(const RcQueuePair&) = delete;
-
-    ~RcQueuePair();
-
     static std::unique_ptr<RcQueuePair> create(const char* dev_name) noexcept(false);
     static std::unique_ptr<RcQueuePair> create(std::shared_ptr<Context> context) noexcept(false);
     static std::unique_ptr<RcQueuePair> create(std::shared_ptr<ProtectionDomain> pd) noexcept(false);
@@ -144,6 +150,8 @@ public:
         std::shared_ptr<CompletionQueue> send_cq,
         std::shared_ptr<CompletionQueue> recv_cq
     ) noexcept(false);
+
+    ~RcQueuePair();
 
     inline std::shared_ptr<ProtectionDomain> get_pd() const {
         return this->pd_;
@@ -283,6 +291,12 @@ private:
     // This could be nullptr if the buffer is created with a raw pointer
     std::shared_ptr<void> inner_buffer_with_deleter_;
 
+    MemoryRegion() = delete;
+    MemoryRegion(const MemoryRegion&) = delete;
+    MemoryRegion& operator=(const MemoryRegion&) = delete;
+    MemoryRegion(MemoryRegion&&) = delete;
+    MemoryRegion& operator=(MemoryRegion&&) = delete;
+
     MemoryRegion(
         std::shared_ptr<ProtectionDomain> pd,
         std::shared_ptr<void> buffer_with_deleter,
@@ -292,12 +306,6 @@ private:
     MemoryRegion(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false);
 
 public:
-    MemoryRegion() = delete;
-    MemoryRegion(const MemoryRegion&) = delete;
-    MemoryRegion& operator=(const MemoryRegion&) = delete;
-
-    ~MemoryRegion();
-
     /**
      * @brief Create a MemoryRegion object with a buffer that has a deleter
      * 
@@ -323,6 +331,8 @@ public:
      */
     static std::unique_ptr<MemoryRegion>
     create(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false);
+
+    ~MemoryRegion();
 
     inline uint32_t get_lkey() const {
         return this->inner->lkey;

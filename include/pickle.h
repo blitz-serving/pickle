@@ -22,9 +22,8 @@ using ::rdma_util::CompletionQueue;
 using ::rdma_util::MemoryRegion;
 using ::rdma_util::ProtectionDomain;
 using ::rdma_util::RcQueuePair;
-using ::rdma_util::WorkCompletion;
 
-const uint64_t kMagic = 32;
+static const uint64_t kMagic = 32;
 
 template<typename T>
 using Queue = moodycamel::ConcurrentQueue<T>;
@@ -32,13 +31,13 @@ using Queue = moodycamel::ConcurrentQueue<T>;
 struct alignas(32) Ticket {
     uint32_t stream_id;
     uint32_t length;
-    uint64_t addr;
     uint32_t key;
+    uint64_t addr;
 
     inline std::string to_string() const {
         std::stringstream ss;
-        ss << "stream_id: " << stream_id << std::hex << std::uppercase << ", length: " << length << ", addr: " << addr
-           << ", key: " << key;
+        ss << "{ stream_id: " << stream_id << ", key: " << key << std::hex << ", length: 0x" << length << ", addr: 0x"
+           << addr << " }";
         return ss.str();
     }
 };
@@ -128,7 +127,7 @@ struct FlushInfo {
     std::shared_ptr<std::atomic<bool>> flag;
 };
 
-class LoopbackFlusher {
+class Flusher {
 private:
     std::unique_ptr<RcQueuePair> loopback_qp_;
     std::unique_ptr<MemoryRegion> loopback_buffer_;
@@ -139,18 +138,18 @@ private:
     std::vector<FlushInfo> flush_infos_;
     Queue<FlushInfo> info_queue_;
 
-    LoopbackFlusher() = delete;
-    LoopbackFlusher(const LoopbackFlusher&) = delete;
-    LoopbackFlusher& operator=(const LoopbackFlusher&) = delete;
-    LoopbackFlusher(LoopbackFlusher&&) = delete;
-    LoopbackFlusher& operator=(LoopbackFlusher&&) = delete;
+    Flusher() = delete;
+    Flusher(const Flusher&) = delete;
+    Flusher& operator=(const Flusher&) = delete;
+    Flusher(Flusher&&) = delete;
+    Flusher& operator=(Flusher&&) = delete;
 
-    LoopbackFlusher(std::shared_ptr<ProtectionDomain>& pd) noexcept(false);
+    Flusher(std::shared_ptr<ProtectionDomain>& pd) noexcept(false);
 
 public:
-    static std::shared_ptr<LoopbackFlusher> create(std::shared_ptr<ProtectionDomain> pd) noexcept(false);
+    static std::shared_ptr<Flusher> create(std::shared_ptr<ProtectionDomain> pd) noexcept(false);
 
-    ~LoopbackFlusher();
+    ~Flusher();
 
     void append(uint32_t rkey, uint64_t raddr, std::shared_ptr<std::atomic<bool>> flag);
 
@@ -177,7 +176,7 @@ private:
     uint64_t recv_buffer_addr_;
     uint32_t recv_buffer_lkey_;
 
-    std::shared_ptr<LoopbackFlusher> loopback_flusher_;
+    std::shared_ptr<Flusher> flusher_;
 
     PickleRecver() = delete;
     PickleRecver(const PickleRecver&) = delete;
@@ -185,11 +184,11 @@ private:
     PickleRecver(PickleRecver&&) = delete;
     PickleRecver& operator=(PickleRecver&&) = delete;
 
-    PickleRecver(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<LoopbackFlusher> flusher = nullptr) noexcept(false);
+    PickleRecver(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<Flusher> flusher) noexcept(false);
 
 public:
     static std::shared_ptr<PickleRecver>
-    create(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<LoopbackFlusher> flusher = nullptr) noexcept(false);
+    create(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<Flusher> flusher = nullptr) noexcept(false);
 
     ~PickleRecver();
 
