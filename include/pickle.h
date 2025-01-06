@@ -11,7 +11,6 @@
 #include <queue>
 #include <sstream>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "concurrentqueue.h"
@@ -30,7 +29,7 @@ const uint64_t kMagic = 32;
 template<typename T>
 using Queue = moodycamel::ConcurrentQueue<T>;
 
-struct Ticket {
+struct alignas(32) Ticket {
     uint32_t stream_id;
     uint32_t length;
     uint64_t addr;
@@ -43,8 +42,6 @@ struct Ticket {
         return ss.str();
     }
 };
-
-// using Command = std::tuple<Ticket, std::shared_ptr<std::atomic<bool>>>;
 
 struct Command {
     Ticket ticket;
@@ -108,44 +105,56 @@ private:
     PickleSender(PickleSender&&) = delete;
     PickleSender& operator=(PickleSender&&) = delete;
 
+    PickleSender(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false);
+
 public:
     static std::shared_ptr<PickleSender>
     create(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size = 256 * 1024) noexcept(false);
 
-    [[nodiscard]] Handle send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
+    ~PickleSender();
 
-    ~PickleSender() = default;
+    [[nodiscard]] Handle send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
 
     /**
      * @brief The executor of the PickleSender.
      * SAFETY: !! This function is not thread-safe !!
      */
     void poll() noexcept(false);
+};
 
+struct FlushInfo {
+    uint32_t rkey;
+    uint64_t raddr;
+    std::shared_ptr<std::atomic<bool>> flag;
+};
+
+class LoopbackFlusher {
 private:
-    PickleSender(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size) :
-        qp_(std::move(qp)),
-        packet_size_(packet_size),
-        wr_occupied_(0) {
-        this->send_wr_list_.resize(kMagic);
-        this->send_sge_list_.resize(kMagic);
+    std::unique_ptr<RcQueuePair> loopback_qp_;
+    std::unique_ptr<MemoryRegion> loopback_buffer_;
+    std::vector<ibv_wc> polled_wcs_;
 
-        this->host_recv_buffer_ = MemoryRegion::create(
-            this->qp_->get_pd(),
-            std::shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
-            sizeof(Ticket) * kMagic
-        );
-        this->recv_buffer_addr_ = uint64_t(this->host_recv_buffer_->get_addr());
-        this->recv_buffer_lkey_ = this->host_recv_buffer_->get_lkey();
-        for (uint64_t wr_id = 0; wr_id < kMagic; ++wr_id) {
-            this->qp_->post_recv(
-                wr_id,
-                this->recv_buffer_addr_ + wr_id * sizeof(Ticket),
-                sizeof(Ticket),
-                this->recv_buffer_lkey_
-            );
-        }
-    }
+    uint64_t pending_flushes_;
+    std::queue<std::shared_ptr<std::atomic<bool>>> flushing_queue_;
+    std::vector<FlushInfo> flush_infos_;
+    Queue<FlushInfo> info_queue_;
+
+    LoopbackFlusher() = delete;
+    LoopbackFlusher(const LoopbackFlusher&) = delete;
+    LoopbackFlusher& operator=(const LoopbackFlusher&) = delete;
+    LoopbackFlusher(LoopbackFlusher&&) = delete;
+    LoopbackFlusher& operator=(LoopbackFlusher&&) = delete;
+
+    LoopbackFlusher(std::shared_ptr<ProtectionDomain>& pd) noexcept(false);
+
+public:
+    static std::shared_ptr<LoopbackFlusher> create(std::shared_ptr<ProtectionDomain> pd) noexcept(false);
+
+    ~LoopbackFlusher();
+
+    void append(uint32_t rkey, uint64_t raddr, std::shared_ptr<std::atomic<bool>> flag);
+
+    void poll() noexcept(false);
 };
 
 class PickleRecver {
@@ -168,11 +177,7 @@ private:
     uint64_t recv_buffer_addr_;
     uint32_t recv_buffer_lkey_;
 
-    // Loopback qp used to flush data
-    bool flush_;
-    std::unique_ptr<RcQueuePair> loopback_qp_;
-    std::unique_ptr<MemoryRegion> loopback_buffer_;
-    std::queue<std::shared_ptr<std::atomic<bool>>> loopback_queue_;
+    std::shared_ptr<LoopbackFlusher> loopback_flusher_;
 
     PickleRecver() = delete;
     PickleRecver(const PickleRecver&) = delete;
@@ -180,67 +185,21 @@ private:
     PickleRecver(PickleRecver&&) = delete;
     PickleRecver& operator=(PickleRecver&&) = delete;
 
+    PickleRecver(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<LoopbackFlusher> flusher = nullptr) noexcept(false);
+
 public:
-    static std::shared_ptr<PickleRecver> create(std::unique_ptr<RcQueuePair> qp, bool flush = true) noexcept(false);
+    static std::shared_ptr<PickleRecver>
+    create(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<LoopbackFlusher> flusher = nullptr) noexcept(false);
+
+    ~PickleRecver();
 
     [[nodiscard]] Handle recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);
-
-    ~PickleRecver() = default;
 
     /**
      * @brief The executor of the PickleRecver
      * SAFETY: !! This function is not thread-safe !!
      */
     void poll() noexcept(false);
-
-private:
-    /**
-     * @brief Construct a new PickleRecver object
-     * 
-     * @param qp Connected Queue Pair as the transport layer
-     * @param flush Whether to read first byte from GPU to CPU through RDMA
-     * after the completion of remote PickleSender
-     */
-    PickleRecver(std::unique_ptr<RcQueuePair> qp, bool flush) noexcept(false) :
-        count_pending_requests_(0),
-        qp_(std::move(qp)),
-        polled_send_wcs_(kMagic),
-        polled_recv_wcs_(kMagic),
-        flush_(flush) {
-        this->host_send_buffer_ = MemoryRegion::create(
-            this->qp_->get_pd(),
-            std::shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
-            sizeof(Ticket) * kMagic
-        );
-        this->send_buffer_addr_ = uint64_t(this->host_send_buffer_->get_addr());
-        this->send_buffer_lkey_ = this->host_send_buffer_->get_lkey();
-
-        this->host_recv_buffer_ = MemoryRegion::create(
-            this->qp_->get_pd(),
-            std::shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
-            sizeof(Ticket) * kMagic
-        );
-        this->recv_buffer_addr_ = uint64_t(this->host_recv_buffer_->get_addr());
-        this->recv_buffer_lkey_ = this->host_recv_buffer_->get_lkey();
-
-        for (uint64_t wr_id = 0; wr_id < kMagic; ++wr_id) {
-            this->free_slots.push(wr_id);
-        }
-
-        if (this->flush_) {
-            auto cq = CompletionQueue::create(this->qp_->get_context());
-            auto loopback_qp = RcQueuePair::create(this->qp_->get_pd(), cq, cq);
-            loopback_qp->bring_up(loopback_qp->get_handshake_data());
-            auto loopback_buffer = MemoryRegion::create(
-                loopback_qp->get_pd(),
-                std::shared_ptr<void>(new uint64_t[16], [](uint64_t* p) { delete[] p; }),
-                sizeof(uint64_t) * 16
-            );
-
-            this->loopback_qp_ = std::move(loopback_qp);
-            this->loopback_buffer_ = std::move(loopback_buffer);
-        }
-    }
 };
 
 }  // namespace pickle

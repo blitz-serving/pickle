@@ -7,12 +7,45 @@
 #include <memory>
 
 #include "pickle_logger.h"
+#include "rdma_util.h"
 
 namespace pickle {
+
+struct alignas(64) Cacheline {
+    uint8_t data[8];
+};
 
 std::shared_ptr<PickleSender> PickleSender::create(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false
 ) {
     return std::shared_ptr<PickleSender>(new PickleSender(std::move(qp), packet_size));
+}
+
+PickleSender::PickleSender(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false) :
+    qp_(std::move(qp)),
+    packet_size_(packet_size),
+    wr_occupied_(0) {
+    this->send_wr_list_.resize(kMagic);
+    this->send_sge_list_.resize(kMagic);
+
+    this->host_recv_buffer_ = MemoryRegion::create(
+        this->qp_->get_pd(),
+        std::shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
+        sizeof(Ticket) * kMagic
+    );
+    this->recv_buffer_addr_ = uint64_t(this->host_recv_buffer_->get_addr());
+    this->recv_buffer_lkey_ = this->host_recv_buffer_->get_lkey();
+    for (uint64_t wr_id = 0; wr_id < kMagic; ++wr_id) {
+        this->qp_->post_recv(
+            wr_id,
+            this->recv_buffer_addr_ + wr_id * sizeof(Ticket),
+            sizeof(Ticket),
+            this->recv_buffer_lkey_
+        );
+    }
+}
+
+PickleSender::~PickleSender() {
+    DEBUG("Destroying PickleSender");
 }
 
 Handle PickleSender::send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey) {
@@ -190,8 +223,40 @@ void PickleSender::poll() noexcept(false) {
     }
 }
 
-std::shared_ptr<PickleRecver> PickleRecver::create(std::unique_ptr<RcQueuePair> qp, bool flush) noexcept(false) {
-    return std::shared_ptr<PickleRecver>(new PickleRecver(std::move(qp), flush));
+PickleRecver::PickleRecver(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<LoopbackFlusher> flusher) noexcept(false) :
+    count_pending_requests_(0),
+    qp_(std::move(qp)),
+    polled_send_wcs_(kMagic),
+    polled_recv_wcs_(kMagic),
+    loopback_flusher_(flusher) {
+    this->host_send_buffer_ = MemoryRegion::create(
+        this->qp_->get_pd(),
+        std::shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
+        sizeof(Ticket) * kMagic
+    );
+    this->send_buffer_addr_ = uint64_t(this->host_send_buffer_->get_addr());
+    this->send_buffer_lkey_ = this->host_send_buffer_->get_lkey();
+
+    this->host_recv_buffer_ = MemoryRegion::create(
+        this->qp_->get_pd(),
+        std::shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
+        sizeof(Ticket) * kMagic
+    );
+    this->recv_buffer_addr_ = uint64_t(this->host_recv_buffer_->get_addr());
+    this->recv_buffer_lkey_ = this->host_recv_buffer_->get_lkey();
+
+    for (uint64_t wr_id = 0; wr_id < kMagic; ++wr_id) {
+        this->free_slots.push(wr_id);
+    }
+}
+
+PickleRecver::~PickleRecver() {
+    DEBUG("Destroying PickleRecver");
+}
+
+std::shared_ptr<PickleRecver>
+PickleRecver::create(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<LoopbackFlusher> flusher) noexcept(false) {
+    return std::shared_ptr<PickleRecver>(new PickleRecver(std::move(qp), flusher));
 }
 
 Handle PickleRecver::recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey) {
@@ -225,12 +290,7 @@ void PickleRecver::poll() noexcept(false) {
         this->free_slots.pop();
         this->pending_local_recv_request_queue_.pop();
         (reinterpret_cast<Ticket*>(this->send_buffer_addr_))[wr_id] = ticket;
-        this->qp_->post_recv(
-            wr_id,
-            this->recv_buffer_addr_ + wr_id * sizeof(Ticket),
-            sizeof(Ticket),
-            this->recv_buffer_lkey_
-        );
+        this->qp_->post_recv(wr_id, this->recv_buffer_addr_ + wr_id * sizeof(Ticket), 0, this->recv_buffer_lkey_);
         this->qp_->post_send_send(
             wr_id,
             this->send_buffer_addr_ + wr_id * sizeof(Ticket),
@@ -273,35 +333,74 @@ void PickleRecver::poll() noexcept(false) {
         this->free_slots.push(wc.wr_id);
 
         // Post-process
-        if (this->flush_) {
-            this->loopback_queue_.push(command.flag);
-            this->loopback_qp_->post_send_read(
-                0,
-                uint64_t(this->loopback_buffer_->get_addr()),
-                command.ticket.addr,
-                8,
-                this->loopback_buffer_->get_lkey(),
-                command.ticket.key,
-                true
-            );
-        } else {
+        if (this->loopback_flusher_ == nullptr) {
             command.flag->store(true);
+        } else {
+            this->loopback_flusher_->append(command.ticket.key, command.ticket.addr, command.flag);
         }
     }
+}
 
-    if (this->flush_) {
-        ret = this->loopback_qp_->poll_send_cq_once(kMagic, this->polled_send_wcs_);
+LoopbackFlusher::LoopbackFlusher(std::shared_ptr<ProtectionDomain>& pd) noexcept(false) : flush_infos_(16) {
+    std::shared_ptr<rdma_util::CompletionQueue> cq = CompletionQueue::create(pd->get_context());
+    this->loopback_qp_ = RcQueuePair::create(pd, cq, cq);
+    this->loopback_qp_->bring_up(this->loopback_qp_->get_handshake_data());
+    this->loopback_buffer_ = MemoryRegion::create(
+        pd,
+        std::shared_ptr<void>(new Cacheline, [](Cacheline* p) { delete p; }),
+        sizeof(Cacheline)
+    );
+}
 
-        PICKLE_ASSERT(ret >= 0, "Failed to poll loopback send CQ");
-        for (const auto& wc : this->polled_send_wcs_) {
+LoopbackFlusher::~LoopbackFlusher() {
+    DEBUG("Destroying LoopbackFlusher");
+}
+
+std::shared_ptr<LoopbackFlusher> LoopbackFlusher::create(std::shared_ptr<ProtectionDomain> pd) noexcept(false) {
+    return std::shared_ptr<LoopbackFlusher>(new LoopbackFlusher(pd));
+}
+
+void LoopbackFlusher::append(uint32_t rkey, uint64_t raddr, std::shared_ptr<std::atomic<bool>> flag) {
+    FlushInfo info {};
+    info.rkey = rkey;
+    info.raddr = raddr;
+    info.flag = flag;
+    this->info_queue_.enqueue(info);
+}
+
+void LoopbackFlusher::poll() noexcept(false) {
+    if (this->pending_flushes_ > 0) {
+        int ret = this->loopback_qp_->poll_send_cq_once(kMagic, this->polled_wcs_);
+        PICKLE_ASSERT(ret >= 0);
+        for (const ibv_wc& wc : this->polled_wcs_) {
             PICKLE_ASSERT(
                 wc.status == ibv_wc_status::IBV_WC_SUCCESS && wc.opcode == ibv_wc_opcode::IBV_WC_RDMA_READ,
-                "Op post_send_read failed: status={}, opcode={}",
+                "Failed to flush data: status={}, opcode={}",
                 int(wc.status),
                 int(wc.opcode)
             );
-            this->loopback_queue_.front()->store(true);
-            this->loopback_queue_.pop();
+            this->flushing_queue_.front()->store(true);
+            this->flushing_queue_.pop();
+            this->pending_flushes_--;
+        }
+    }
+
+    if (this->pending_flushes_ < 16) {
+        uint64_t count_dequeued =
+            this->info_queue_.try_dequeue_bulk(this->flush_infos_.begin(), 16 - this->pending_flushes_);
+        for (uint64_t i = 0; i < count_dequeued; ++i) {
+            this->pending_flushes_++;
+            FlushInfo& info = this->flush_infos_[i];
+            this->flushing_queue_.push(info.flag);
+            this->loopback_qp_->post_send_read(
+                0,
+                uint64_t(this->loopback_buffer_->get_addr()),
+                info.raddr,
+                8,
+                this->loopback_buffer_->get_lkey(),
+                info.rkey,
+                true
+            );
         }
     }
 }

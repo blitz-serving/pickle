@@ -20,9 +20,9 @@ constexpr const char* kDevice2 = "mlx5_5";
 
 int reporter_thread();
 int read_thread(
-    rdma_util::Arc<rdma_util::RcQueuePair> qp,
-    rdma_util::Arc<rdma_util::MemoryRegion> local_mr,
-    rdma_util::Arc<rdma_util::MemoryRegion> remote_mr
+    std::shared_ptr<rdma_util::RcQueuePair> qp,
+    std::shared_ptr<rdma_util::MemoryRegion> local_mr,
+    std::shared_ptr<rdma_util::MemoryRegion> remote_mr
 );
 
 int main() {
@@ -30,22 +30,22 @@ int main() {
     auto recv_buffer = malloc(kBufferSize);
 
     {
-        std::vector<rdma_util::Arc<rdma_util::RcQueuePair>> qp_list_1;
-        std::vector<rdma_util::Arc<rdma_util::RcQueuePair>> qp_list_2;
+        std::vector<std::shared_ptr<rdma_util::RcQueuePair>> qp_list_1;
+        std::vector<std::shared_ptr<rdma_util::RcQueuePair>> qp_list_2;
 
         std::vector<std::thread> threads;
 
-        rdma_util::Arc<rdma_util::ProtectionDomain> pd1 =
+        std::shared_ptr<rdma_util::ProtectionDomain> pd1 =
             rdma_util::ProtectionDomain::create(rdma_util::Context::create(kDevice1));
-        rdma_util::Arc<rdma_util::MemoryRegion> mr1 = rdma_util::MemoryRegion::create(pd1, send_buffer, kBufferSize);
+        std::shared_ptr<rdma_util::MemoryRegion> mr1 = rdma_util::MemoryRegion::create(pd1, send_buffer, kBufferSize);
 
-        rdma_util::Arc<rdma_util::ProtectionDomain> pd2 =
+        std::shared_ptr<rdma_util::ProtectionDomain> pd2 =
             rdma_util::ProtectionDomain::create(rdma_util::Context::create(kDevice2));
-        rdma_util::Arc<rdma_util::MemoryRegion> mr2 = rdma_util::MemoryRegion::create(pd2, recv_buffer, kBufferSize);
+        std::shared_ptr<rdma_util::MemoryRegion> mr2 = rdma_util::MemoryRegion::create(pd2, recv_buffer, kBufferSize);
 
         for (uint64_t i = 0; i < kThreadNum; ++i) {
-            rdma_util::Arc<rdma_util::RcQueuePair> qp1 = rdma_util::RcQueuePair::create(pd1);
-            rdma_util::Arc<rdma_util::RcQueuePair> qp2 = rdma_util::RcQueuePair::create(pd2);
+            std::shared_ptr<rdma_util::RcQueuePair> qp1 = rdma_util::RcQueuePair::create(pd1);
+            std::shared_ptr<rdma_util::RcQueuePair> qp2 = rdma_util::RcQueuePair::create(pd2);
 
             qp1->bring_up(qp2->get_handshake_data());
             qp2->bring_up(qp1->get_handshake_data());
@@ -88,9 +88,9 @@ int reporter_thread() {
 }
 
 int read_thread(
-    rdma_util::Arc<rdma_util::RcQueuePair> qp,
-    rdma_util::Arc<rdma_util::MemoryRegion> local_mr,
-    rdma_util::Arc<rdma_util::MemoryRegion> remote_mr
+    std::shared_ptr<rdma_util::RcQueuePair> qp,
+    std::shared_ptr<rdma_util::MemoryRegion> local_mr,
+    std::shared_ptr<rdma_util::MemoryRegion> remote_mr
 ) {
     uint64_t base_laddr = uint64_t(local_mr->get_addr());
     uint64_t base_raddr = uint64_t(remote_mr->get_addr());

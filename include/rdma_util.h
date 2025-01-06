@@ -12,12 +12,6 @@
 
 namespace rdma_util {
 
-template<typename T>
-using Arc = std::shared_ptr<T>;
-
-template<typename T>
-using Box = std::unique_ptr<T>;
-
 struct HandshakeData {
     ibv_gid gid;
     uint16_t lid;
@@ -67,7 +61,7 @@ public:
 
     ~Context();
 
-    static Box<Context> create(const char* dev_name) noexcept(false);
+    static std::unique_ptr<Context> create(const char* dev_name) noexcept(false);
 };
 
 class ProtectionDomain {
@@ -78,9 +72,9 @@ class ProtectionDomain {
 private:
     ibv_pd* inner;
 
-    Arc<Context> context_;
+    std::shared_ptr<Context> context_;
 
-    ProtectionDomain(Arc<Context> context) noexcept(false);
+    ProtectionDomain(std::shared_ptr<Context> context) noexcept(false);
 
 public:
     ProtectionDomain() = delete;
@@ -89,9 +83,9 @@ public:
 
     ~ProtectionDomain();
 
-    static Box<ProtectionDomain> create(Arc<Context> context) noexcept(false);
+    static std::unique_ptr<ProtectionDomain> create(std::shared_ptr<Context> context) noexcept(false);
 
-    inline Arc<Context> get_context() const {
+    inline std::shared_ptr<Context> get_context() const {
         return this->context_;
     }
 };
@@ -102,9 +96,9 @@ class CompletionQueue {
 private:
     ibv_cq* inner;
 
-    Arc<Context> context_;
+    std::shared_ptr<Context> context_;
 
-    CompletionQueue(Arc<Context> context, int cqe) noexcept(false);
+    CompletionQueue(std::shared_ptr<Context> context, int cqe) noexcept(false);
 
 public:
     CompletionQueue() = delete;
@@ -113,7 +107,7 @@ public:
 
     ~CompletionQueue();
 
-    static Arc<CompletionQueue> create(Arc<Context> context, int cqe = 128) noexcept(false);
+    static std::shared_ptr<CompletionQueue> create(std::shared_ptr<Context> context, int cqe = 128) noexcept(false);
 };
 
 class RcQueuePair {
@@ -124,12 +118,16 @@ class RcQueuePair {
 private:
     ibv_qp* inner;
 
-    Arc<ProtectionDomain> pd_;
-    Arc<Context> context_;
-    Arc<CompletionQueue> send_cq_;
-    Arc<CompletionQueue> recv_cq_;
+    std::shared_ptr<ProtectionDomain> pd_;
+    std::shared_ptr<Context> context_;
+    std::shared_ptr<CompletionQueue> send_cq_;
+    std::shared_ptr<CompletionQueue> recv_cq_;
 
-    RcQueuePair(Arc<ProtectionDomain> pd, Arc<CompletionQueue> send_cq, Arc<CompletionQueue> recv_cq) noexcept(false);
+    RcQueuePair(
+        std::shared_ptr<ProtectionDomain> pd,
+        std::shared_ptr<CompletionQueue> send_cq,
+        std::shared_ptr<CompletionQueue> recv_cq
+    ) noexcept(false);
 
 public:
     RcQueuePair() = delete;
@@ -138,17 +136,20 @@ public:
 
     ~RcQueuePair();
 
-    static Box<RcQueuePair> create(const char* dev_name) noexcept(false);
-    static Box<RcQueuePair> create(Arc<Context> context) noexcept(false);
-    static Box<RcQueuePair> create(Arc<ProtectionDomain> pd) noexcept(false);
-    static Box<RcQueuePair>
-    create(Arc<ProtectionDomain> pd, Arc<CompletionQueue> send_cq, Arc<CompletionQueue> recv_cq) noexcept(false);
+    static std::unique_ptr<RcQueuePair> create(const char* dev_name) noexcept(false);
+    static std::unique_ptr<RcQueuePair> create(std::shared_ptr<Context> context) noexcept(false);
+    static std::unique_ptr<RcQueuePair> create(std::shared_ptr<ProtectionDomain> pd) noexcept(false);
+    static std::unique_ptr<RcQueuePair> create(
+        std::shared_ptr<ProtectionDomain> pd,
+        std::shared_ptr<CompletionQueue> send_cq,
+        std::shared_ptr<CompletionQueue> recv_cq
+    ) noexcept(false);
 
-    inline Arc<ProtectionDomain> get_pd() const {
+    inline std::shared_ptr<ProtectionDomain> get_pd() const {
         return this->pd_;
     }
 
-    inline Arc<Context> get_context() const {
+    inline std::shared_ptr<Context> get_context() const {
         return this->context_;
     }
 
@@ -276,15 +277,19 @@ class MemoryRegion {
 private:
     ibv_mr* inner;
 
-    Arc<ProtectionDomain> pd_;
-    Arc<Context> context_;
+    std::shared_ptr<ProtectionDomain> pd_;
+    std::shared_ptr<Context> context_;
 
     // This could be nullptr if the buffer is created with a raw pointer
-    Arc<void> inner_buffer_with_deleter_;
+    std::shared_ptr<void> inner_buffer_with_deleter_;
 
-    MemoryRegion(Arc<ProtectionDomain> pd, Arc<void> buffer_with_deleter, uint64_t length) noexcept(false);
+    MemoryRegion(
+        std::shared_ptr<ProtectionDomain> pd,
+        std::shared_ptr<void> buffer_with_deleter,
+        uint64_t length
+    ) noexcept(false);
 
-    MemoryRegion(Arc<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false);
+    MemoryRegion(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false);
 
 public:
     MemoryRegion() = delete;
@@ -302,8 +307,10 @@ public:
      * @param buffer_with_deleter buffer with a deleter
      * @param length length of the buffer
      */
-    static Box<MemoryRegion>
-    create(Arc<ProtectionDomain> pd, Arc<void> buffer_with_deleter, uint64_t length) noexcept(false);
+    static std::unique_ptr<MemoryRegion>
+    create(std::shared_ptr<ProtectionDomain> pd, std::shared_ptr<void> buffer_with_deleter, uint64_t length) noexcept(
+        false
+    );
 
     /**
      * @brief Create a MemoryRegion object with a buffer that has a deleter
@@ -314,7 +321,8 @@ public:
      * @param addr address of the raw buffer
      * @param length length of the buffer
      */
-    static Box<MemoryRegion> create(Arc<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false);
+    static std::unique_ptr<MemoryRegion>
+    create(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false);
 
     inline uint32_t get_lkey() const {
         return this->inner->lkey;
@@ -351,19 +359,19 @@ struct Ticket {
     }
 };
 
-using Command = std::tuple<Ticket, Arc<std::atomic<bool>>>;
+using Command = std::tuple<Ticket, std::shared_ptr<std::atomic<bool>>>;
 
 template<typename T>
 using MultiMap = std::map<uint32_t, std::queue<T>>;
 
 class Handle {
 private:
-    Arc<std::atomic<bool>> finished_;
+    std::shared_ptr<std::atomic<bool>> finished_;
 
 public:
     Handle() : finished_(std::make_shared<std::atomic<bool>>(true)) {}
 
-    Handle(const Arc<std::atomic<bool>>& finished) : finished_(finished) {}
+    Handle(const std::shared_ptr<std::atomic<bool>>& finished) : finished_(finished) {}
 
     /**
      * @brief Check if the send/recv is finished.
@@ -386,7 +394,7 @@ class TcclContext {
 private:
     uint64_t dop_;
 
-    Arc<RcQueuePair> qp_;
+    std::shared_ptr<RcQueuePair> qp_;
 
     std::vector<ibv_wc> send_ibv_wc_buffer_;
     std::vector<WorkCompletion> polled_send_wcs_;
@@ -397,11 +405,11 @@ private:
     Queue<Command> send_request_command_queue_;
     Queue<Command> recv_request_command_queue_;
 
-    Box<MemoryRegion> host_send_buffer_;
+    std::unique_ptr<MemoryRegion> host_send_buffer_;
     uint64_t send_buffer_addr_;
     uint32_t send_buffer_lkey_;
 
-    Box<MemoryRegion> host_recv_buffer_;
+    std::unique_ptr<MemoryRegion> host_recv_buffer_;
     uint64_t recv_buffer_addr_;
     uint32_t recv_buffer_lkey_;
 
@@ -412,14 +420,14 @@ private:
     std::queue<Ticket> pending_local_recv_request_queue_;
     MultiMap<Ticket> pending_remote_recv_request_map_;
     MultiMap<Ticket> pending_local_send_request_map_;
-    MultiMap<Arc<std::atomic<bool>>> pending_local_send_flag_map_;
+    MultiMap<std::shared_ptr<std::atomic<bool>>> pending_local_send_flag_map_;
     std::queue<uint64_t> free_post_send_send_slots_;
     uint64_t post_send_write_slot_available_;
     uint64_t post_send_send_slot_available_;
 
     // Used in recv_one_round
     uint64_t pending_recv_request_count_;
-    MultiMap<Arc<std::atomic<bool>>> pending_local_recv_request_map_;
+    MultiMap<std::shared_ptr<std::atomic<bool>>> pending_local_recv_request_map_;
 
     // Background polling
     bool background_polling_;
@@ -468,14 +476,14 @@ public:
         this->poll_recv_one_round_inner();
     }
 
-    static Arc<TcclContext>
-    create(Box<RcQueuePair> qp, bool spawn_polling_thread = true, uint64_t dop = 16) noexcept(false);
+    static std::shared_ptr<TcclContext>
+    create(std::unique_ptr<RcQueuePair> qp, bool spawn_polling_thread = true, uint64_t dop = 16) noexcept(false);
     [[nodiscard]] Handle send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey, uint32_t padding = 0);
     [[nodiscard]] Handle recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey, uint32_t padding = 0);
 
 private:
     TcclContext() = default;
-    void initialize(Box<RcQueuePair> qp, uint64_t dop) noexcept(false);
+    void initialize(std::unique_ptr<RcQueuePair> qp, uint64_t dop) noexcept(false);
 };
 
 }  // namespace rdma_util

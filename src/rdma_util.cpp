@@ -48,17 +48,18 @@ Context::Context(const char* dev_name) noexcept(false) {
 }
 
 Context::~Context() {
+    DEBUG("Destroying Context");
     if (this->inner) {
         ibv_close_device(this->inner);
     }
 }
 
-Box<Context> Context::create(const char* dev_name) noexcept(false) {
+std::unique_ptr<Context> Context::create(const char* dev_name) noexcept(false) {
     DEBUG("Creating context for device: {}", dev_name);
-    return Box<Context>(new Context(dev_name));
+    return std::unique_ptr<Context>(new Context(dev_name));
 }
 
-ProtectionDomain::ProtectionDomain(Arc<Context> context) noexcept(false) {
+ProtectionDomain::ProtectionDomain(std::shared_ptr<Context> context) noexcept(false) {
     this->context_ = context;
     this->inner = ibv_alloc_pd(context->inner);
     if (this->inner == nullptr) {
@@ -66,17 +67,18 @@ ProtectionDomain::ProtectionDomain(Arc<Context> context) noexcept(false) {
     }
 }
 
-Box<ProtectionDomain> ProtectionDomain::create(Arc<Context> context) noexcept(false) {
-    return Box<ProtectionDomain>(new ProtectionDomain(context));
+std::unique_ptr<ProtectionDomain> ProtectionDomain::create(std::shared_ptr<Context> context) noexcept(false) {
+    return std::unique_ptr<ProtectionDomain>(new ProtectionDomain(context));
 }
 
 ProtectionDomain::~ProtectionDomain() {
+    DEBUG("Destroying ProtectionDomain");
     if (this->inner) {
         ibv_dealloc_pd(this->inner);
     }
 }
 
-CompletionQueue::CompletionQueue(Arc<Context> context, int cqe) noexcept(false) {
+CompletionQueue::CompletionQueue(std::shared_ptr<Context> context, int cqe) noexcept(false) {
     this->context_ = context;
     this->inner = ibv_create_cq(context->inner, cqe, nullptr, nullptr, 0);
     if (this->inner == nullptr) {
@@ -85,18 +87,21 @@ CompletionQueue::CompletionQueue(Arc<Context> context, int cqe) noexcept(false) 
 }
 
 CompletionQueue::~CompletionQueue() {
+    DEBUG("Destroying CompletionQueue");
     if (this->inner) {
         ibv_destroy_cq(this->inner);
     }
 }
 
-Arc<CompletionQueue> CompletionQueue::create(Arc<Context> context, int cqe) {
-    return Arc<CompletionQueue>(new CompletionQueue(context, cqe));
+std::shared_ptr<CompletionQueue> CompletionQueue::create(std::shared_ptr<Context> context, int cqe) {
+    return std::shared_ptr<CompletionQueue>(new CompletionQueue(context, cqe));
 }
 
-RcQueuePair::RcQueuePair(Arc<ProtectionDomain> pd, Arc<CompletionQueue> send_cq, Arc<CompletionQueue> recv_cq) noexcept(
-    false
-) {
+RcQueuePair::RcQueuePair(
+    std::shared_ptr<ProtectionDomain> pd,
+    std::shared_ptr<CompletionQueue> send_cq,
+    std::shared_ptr<CompletionQueue> recv_cq
+) noexcept(false) {
     this->pd_ = pd;
     this->context_ = pd->context_;
     this->send_cq_ = send_cq;
@@ -116,32 +121,35 @@ RcQueuePair::RcQueuePair(Arc<ProtectionDomain> pd, Arc<CompletionQueue> send_cq,
     this->inner = ibv_create_qp(pd->inner, &init_attr);
 }
 
-Box<RcQueuePair> RcQueuePair::create(const char* dev_name) noexcept(false) {
-    Arc<Context> context = Context::create(dev_name);
+std::unique_ptr<RcQueuePair> RcQueuePair::create(const char* dev_name) noexcept(false) {
+    std::shared_ptr<Context> context = Context::create(dev_name);
     auto send_cq = CompletionQueue::create(context);
     auto recv_cq = CompletionQueue::create(context);
-    return Box<RcQueuePair>(new RcQueuePair(ProtectionDomain::create(context), send_cq, recv_cq));
+    return std::unique_ptr<RcQueuePair>(new RcQueuePair(ProtectionDomain::create(context), send_cq, recv_cq));
 }
 
-Box<RcQueuePair> RcQueuePair::create(Arc<Context> context) noexcept(false) {
+std::unique_ptr<RcQueuePair> RcQueuePair::create(std::shared_ptr<Context> context) noexcept(false) {
     auto send_cq = CompletionQueue::create(context);
     auto recv_cq = CompletionQueue::create(context);
-    return Box<RcQueuePair>(new RcQueuePair(ProtectionDomain::create(context), send_cq, recv_cq));
+    return std::unique_ptr<RcQueuePair>(new RcQueuePair(ProtectionDomain::create(context), send_cq, recv_cq));
 }
 
-Box<RcQueuePair> RcQueuePair::create(Arc<ProtectionDomain> pd) noexcept(false) {
+std::unique_ptr<RcQueuePair> RcQueuePair::create(std::shared_ptr<ProtectionDomain> pd) noexcept(false) {
     auto send_cq = CompletionQueue::create(pd->get_context());
     auto recv_cq = CompletionQueue::create(pd->get_context());
-    return Box<RcQueuePair>(new RcQueuePair(pd, send_cq, recv_cq));
+    return std::unique_ptr<RcQueuePair>(new RcQueuePair(pd, send_cq, recv_cq));
 }
 
-Box<RcQueuePair>
-RcQueuePair::create(Arc<ProtectionDomain> pd, Arc<CompletionQueue> send_cq, Arc<CompletionQueue> recv_cq) noexcept(false
-) {
-    return Box<RcQueuePair>(new RcQueuePair(pd, send_cq, recv_cq));
+std::unique_ptr<RcQueuePair> RcQueuePair::create(
+    std::shared_ptr<ProtectionDomain> pd,
+    std::shared_ptr<CompletionQueue> send_cq,
+    std::shared_ptr<CompletionQueue> recv_cq
+) noexcept(false) {
+    return std::unique_ptr<RcQueuePair>(new RcQueuePair(pd, send_cq, recv_cq));
 }
 
 RcQueuePair::~RcQueuePair() {
+    DEBUG("Destroying RcQueuePair");
     if (this->inner) {
         ibv_destroy_qp(this->inner);
     }
@@ -618,7 +626,11 @@ int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, std::vector<ibv_wc>& p
     return ret;
 }
 
-MemoryRegion::MemoryRegion(Arc<ProtectionDomain> pd, Arc<void> buffer_with_deleter, uint64_t length) noexcept(false) {
+MemoryRegion::MemoryRegion(
+    std::shared_ptr<ProtectionDomain> pd,
+    std::shared_ptr<void> buffer_with_deleter,
+    uint64_t length
+) noexcept(false) {
     auto addr = buffer_with_deleter.get();
 
     this->inner_buffer_with_deleter_ = buffer_with_deleter;
@@ -636,7 +648,7 @@ MemoryRegion::MemoryRegion(Arc<ProtectionDomain> pd, Arc<void> buffer_with_delet
     }
 }
 
-MemoryRegion::MemoryRegion(Arc<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false) {
+MemoryRegion::MemoryRegion(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false) {
     this->inner_buffer_with_deleter_ = nullptr;
     this->pd_ = pd;
     this->context_ = pd->context_;
@@ -653,22 +665,28 @@ MemoryRegion::MemoryRegion(Arc<ProtectionDomain> pd, void* addr, uint64_t length
 }
 
 MemoryRegion::~MemoryRegion() {
+    DEBUG("Destroying MemoryRegion");
     if (this->inner) {
         ibv_dereg_mr(this->inner);
     }
 }
 
-Box<MemoryRegion>
-MemoryRegion::create(Arc<ProtectionDomain> pd, Arc<void> buffer_with_deleter, uint64_t length) noexcept(false) {
-    return Box<MemoryRegion>(new MemoryRegion(pd, buffer_with_deleter, length));
+std::unique_ptr<MemoryRegion> MemoryRegion::create(
+    std::shared_ptr<ProtectionDomain> pd,
+    std::shared_ptr<void> buffer_with_deleter,
+    uint64_t length
+) noexcept(false) {
+    return std::unique_ptr<MemoryRegion>(new MemoryRegion(pd, buffer_with_deleter, length));
 }
 
-Box<MemoryRegion> MemoryRegion::create(Arc<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false) {
-    return Box<MemoryRegion>(new MemoryRegion(pd, addr, length));
+std::unique_ptr<MemoryRegion>
+MemoryRegion::create(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false) {
+    return std::unique_ptr<MemoryRegion>(new MemoryRegion(pd, addr, length));
 }
 
-Arc<TcclContext> TcclContext::create(Box<RcQueuePair> qp, bool spawn_polling_thread, uint64_t dop) noexcept(false) {
-    Arc<TcclContext> tccl_context = Arc<TcclContext>(new TcclContext());
+std::shared_ptr<TcclContext>
+TcclContext::create(std::unique_ptr<RcQueuePair> qp, bool spawn_polling_thread, uint64_t dop) noexcept(false) {
+    std::shared_ptr<TcclContext> tccl_context = std::shared_ptr<TcclContext>(new TcclContext());
     tccl_context->initialize(std::move(qp), dop);
     if (spawn_polling_thread) {
         tccl_context->background_polling_ = true;
@@ -692,7 +710,7 @@ TcclContext::~TcclContext() {
     }
 }
 
-void TcclContext::initialize(Box<RcQueuePair> qp, uint64_t dop) noexcept(false) {
+void TcclContext::initialize(std::unique_ptr<RcQueuePair> qp, uint64_t dop) noexcept(false) {
     this->dop_ = dop;
 
     this->qp_ = std::move(qp);
@@ -710,7 +728,7 @@ void TcclContext::initialize(Box<RcQueuePair> qp, uint64_t dop) noexcept(false) 
 
     this->host_send_buffer_ = MemoryRegion::create(
         this->qp_->get_pd(),
-        Arc<void>(new Ticket[dop], [](Ticket* p) { delete[] p; }),
+        std::shared_ptr<void>(new Ticket[dop], [](Ticket* p) { delete[] p; }),
         sizeof(Ticket) * this->dop_
     );
     this->send_buffer_addr_ = uint64_t(this->host_send_buffer_->get_addr());
@@ -718,7 +736,7 @@ void TcclContext::initialize(Box<RcQueuePair> qp, uint64_t dop) noexcept(false) 
 
     this->host_recv_buffer_ = MemoryRegion::create(
         this->qp_->get_pd(),
-        Arc<void>(new Ticket[2 * dop], [](Ticket* p) { delete[] p; }),
+        std::shared_ptr<void>(new Ticket[2 * dop], [](Ticket* p) { delete[] p; }),
         sizeof(Ticket) * 2 * this->dop_
     );
     this->recv_buffer_addr_ = uint64_t(this->host_recv_buffer_->get_addr());
@@ -730,7 +748,7 @@ void TcclContext::initialize(Box<RcQueuePair> qp, uint64_t dop) noexcept(false) 
     this->pending_local_recv_request_queue_ = std::queue<Ticket>();
     this->pending_remote_recv_request_map_ = MultiMap<Ticket>();
     this->pending_local_send_request_map_ = MultiMap<Ticket>();
-    this->pending_local_send_flag_map_ = MultiMap<Arc<std::atomic<bool>>>();
+    this->pending_local_send_flag_map_ = MultiMap<std::shared_ptr<std::atomic<bool>>>();
 
     this->free_post_send_send_slots_ = std::queue<uint64_t>();
     this->post_send_write_slot_available_ = this->dop_;
@@ -740,7 +758,7 @@ void TcclContext::initialize(Box<RcQueuePair> qp, uint64_t dop) noexcept(false) 
     }
 
     this->pending_recv_request_count_ = 0;
-    this->pending_local_recv_request_map_ = MultiMap<Arc<std::atomic<bool>>>();
+    this->pending_local_recv_request_map_ = MultiMap<std::shared_ptr<std::atomic<bool>>>();
     for (uint64_t wr_id = 0; wr_id < 2 * dop; ++wr_id) {
         this->qp_->post_recv(
             wr_id,
@@ -913,7 +931,8 @@ void TcclContext::poll_recv_one_round_inner() noexcept(false) {
             } else {
                 auto wr_id = wc.wr_id;
                 if (wc.opcode == ibv_wc_opcode::IBV_WC_RECV_RDMA_WITH_IMM) {
-                    std::queue<Arc<std::atomic<bool>>>& queue = this->pending_local_recv_request_map_[wc.imm_data];
+                    std::queue<std::shared_ptr<std::atomic<bool>>>& queue =
+                        this->pending_local_recv_request_map_[wc.imm_data];
                     queue.front()->store(1);
                     queue.pop();
                     this->pending_recv_request_count_--;

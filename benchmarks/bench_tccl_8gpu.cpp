@@ -13,7 +13,7 @@
 #include "gpu_mem_util.h"
 #include "rdma_util.h"
 
-constexpr uint64_t kDataBufferSize = 75ull * 1024 * 1024 * 1024;
+constexpr const uint64_t kDataBufferSize = 75ull * 1024 * 1024 * 1024;
 
 constexpr const uint64_t KB = 1024ull;
 constexpr const uint64_t MB = 1024ull * KB;
@@ -47,8 +47,8 @@ void reporter_thread() {
 }
 
 void sender_thread(
-    rdma_util::Arc<rdma_util::TcclContext> context,
-    rdma_util::Arc<rdma_util::MemoryRegion> data_mr,
+    std::shared_ptr<rdma_util::TcclContext> context,
+    std::shared_ptr<rdma_util::MemoryRegion> data_mr,
     uint32_t stream_id
 ) {
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
@@ -86,8 +86,8 @@ void sender_thread(
 };
 
 void recver_thread(
-    rdma_util::Arc<rdma_util::TcclContext> context,
-    rdma_util::Arc<rdma_util::MemoryRegion> data_mr,
+    std::shared_ptr<rdma_util::TcclContext> context,
+    std::shared_ptr<rdma_util::MemoryRegion> data_mr,
     uint32_t stream_id
 ) {
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
@@ -138,17 +138,17 @@ int main() {
 
         auto gpu_idx1 = GPUs[i * 2];
         auto gpu_idx2 = GPUs[i * 2 + 1];
-        rdma_util::Arc<rdma_util::MemoryRegion> data_mr1 = rdma_util::MemoryRegion::create(
+        std::shared_ptr<rdma_util::MemoryRegion> data_mr1 = rdma_util::MemoryRegion::create(
             qp1->get_pd(),
-            rdma_util::Arc<void>(
+            std::shared_ptr<void>(
                 gpu_mem_util::malloc_gpu_buffer(kDataBufferSize, gpu_idx1),
                 [gpu_idx1](void* p) { gpu_mem_util::free_gpu_buffer(p, gpu_idx1); }
             ),
             kDataBufferSize
         );
-        rdma_util::Arc<rdma_util::MemoryRegion> data_mr2 = rdma_util::MemoryRegion::create(
+        std::shared_ptr<rdma_util::MemoryRegion> data_mr2 = rdma_util::MemoryRegion::create(
             qp2->get_pd(),
-            rdma_util::Arc<void>(
+            std::shared_ptr<void>(
                 gpu_mem_util::malloc_gpu_buffer(kDataBufferSize, gpu_idx2),
                 [gpu_idx2](void* p) { gpu_mem_util::free_gpu_buffer(p, gpu_idx2); }
             ),

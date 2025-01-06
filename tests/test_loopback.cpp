@@ -13,16 +13,16 @@ static uint8_t buffer[1024];
 
 TEST(OpenDevice, CreateQP) {
     const char* dev_name = "mlx5_0";
-    rdma_util::Arc<rdma_util::Context> context = rdma_util::Context::create(dev_name);
-    rdma_util::Arc<rdma_util::RcQueuePair> qp = rdma_util::RcQueuePair::create(context);
+    std::shared_ptr<rdma_util::Context> context = rdma_util::Context::create(dev_name);
+    std::shared_ptr<rdma_util::RcQueuePair> qp = rdma_util::RcQueuePair::create(context);
     qp->bring_up(qp->get_handshake_data());
     ASSERT_EQ(qp->query_qp_state(), ibv_qp_state::IBV_QPS_RTS);
 }
 
 TEST(OpenDevice, SendRecv) {
     const char* dev_name = "mlx5_0";
-    rdma_util::Arc<rdma_util::Context> context = rdma_util::Context::create(dev_name);
-    rdma_util::Arc<rdma_util::RcQueuePair> qp = rdma_util::RcQueuePair::create(context);
+    std::shared_ptr<rdma_util::Context> context = rdma_util::Context::create(dev_name);
+    std::shared_ptr<rdma_util::RcQueuePair> qp = rdma_util::RcQueuePair::create(context);
     qp->bring_up(qp->get_handshake_data());
     ASSERT_EQ(qp->query_qp_state(), ibv_qp_state::IBV_QPS_RTS);
 
@@ -44,8 +44,8 @@ TEST(OpenDevice, SendRecv) {
 
 TEST(OpenDevice, SendRecvError) {
     const char* dev_name = "mlx5_0";
-    rdma_util::Arc<rdma_util::Context> context = rdma_util::Context::create(dev_name);
-    rdma_util::Arc<rdma_util::RcQueuePair> qp = rdma_util::RcQueuePair::create(context);
+    std::shared_ptr<rdma_util::Context> context = rdma_util::Context::create(dev_name);
+    std::shared_ptr<rdma_util::RcQueuePair> qp = rdma_util::RcQueuePair::create(context);
     qp->bring_up(qp->get_handshake_data());
     ASSERT_EQ(qp->query_qp_state(), ibv_qp_state::IBV_QPS_RTS);
 

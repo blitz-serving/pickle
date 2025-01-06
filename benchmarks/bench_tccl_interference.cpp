@@ -29,8 +29,8 @@ constexpr const uint64_t kDataBufferSize = 75ull * GB;
 static bool started = false;
 
 void send_params_thread(
-    rdma_util::Arc<rdma_util::TcclContext> context,
-    rdma_util::Arc<rdma_util::MemoryRegion> data_mr,
+    std::shared_ptr<rdma_util::TcclContext> context,
+    std::shared_ptr<rdma_util::MemoryRegion> data_mr,
     uint32_t stream_id
 ) {
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
@@ -57,8 +57,8 @@ void send_params_thread(
 }
 
 void recv_params_thread(
-    rdma_util::Arc<rdma_util::TcclContext> context,
-    rdma_util::Arc<rdma_util::MemoryRegion> data_mr,
+    std::shared_ptr<rdma_util::TcclContext> context,
+    std::shared_ptr<rdma_util::MemoryRegion> data_mr,
     uint32_t stream_id
 ) {
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
@@ -92,8 +92,8 @@ void recv_params_thread(
 }
 
 void send_kv_cache_thread(
-    rdma_util::Arc<rdma_util::TcclContext> context,
-    rdma_util::Arc<rdma_util::MemoryRegion> data_mr,
+    std::shared_ptr<rdma_util::TcclContext> context,
+    std::shared_ptr<rdma_util::MemoryRegion> data_mr,
     std::shared_ptr<moodycamel::ConcurrentQueue<uint32_t>> queue,
     uint32_t stream_id
 ) {
@@ -139,8 +139,8 @@ void send_kv_cache_thread(
 };
 
 void recv_kv_cache_thread(
-    rdma_util::Arc<rdma_util::TcclContext> context,
-    rdma_util::Arc<rdma_util::MemoryRegion> data_mr,
+    std::shared_ptr<rdma_util::TcclContext> context,
+    std::shared_ptr<rdma_util::MemoryRegion> data_mr,
     std::shared_ptr<moodycamel::ConcurrentQueue<uint32_t>> queue,
     uint32_t stream_id
 ) {
@@ -181,13 +181,13 @@ void recv_kv_cache_thread(
 };
 
 int main() {
-    rdma_util::Arc<rdma_util::Context> r_context_0 = rdma_util::Context::create(kRNIC0);
-    rdma_util::Arc<rdma_util::Context> r_context_1 = rdma_util::Context::create(kRNIC1);
-    rdma_util::Arc<rdma_util::Context> r_context_2 = rdma_util::Context::create(kRNIC2);
+    std::shared_ptr<rdma_util::Context> r_context_0 = rdma_util::Context::create(kRNIC0);
+    std::shared_ptr<rdma_util::Context> r_context_1 = rdma_util::Context::create(kRNIC1);
+    std::shared_ptr<rdma_util::Context> r_context_2 = rdma_util::Context::create(kRNIC2);
 
-    rdma_util::Arc<rdma_util::ProtectionDomain> pd0 = rdma_util::ProtectionDomain::create(r_context_0);
-    rdma_util::Arc<rdma_util::ProtectionDomain> pd1 = rdma_util::ProtectionDomain::create(r_context_1);
-    rdma_util::Arc<rdma_util::ProtectionDomain> pd2 = rdma_util::ProtectionDomain::create(r_context_2);
+    std::shared_ptr<rdma_util::ProtectionDomain> pd0 = rdma_util::ProtectionDomain::create(r_context_0);
+    std::shared_ptr<rdma_util::ProtectionDomain> pd1 = rdma_util::ProtectionDomain::create(r_context_1);
+    std::shared_ptr<rdma_util::ProtectionDomain> pd2 = rdma_util::ProtectionDomain::create(r_context_2);
 
     auto qp0_1 = rdma_util::RcQueuePair::create(pd0);
     auto qp0_2 = rdma_util::RcQueuePair::create(pd0);
@@ -200,25 +200,25 @@ int main() {
     qp0_2->bring_up(qp2->get_handshake_data());
     qp2->bring_up(qp0_2->get_handshake_data());
 
-    rdma_util::Arc<rdma_util::MemoryRegion> data_mr0 = rdma_util::MemoryRegion::create(
+    std::shared_ptr<rdma_util::MemoryRegion> data_mr0 = rdma_util::MemoryRegion::create(
         pd0,
-        rdma_util::Arc<void>(
+        std::shared_ptr<void>(
             gpu_mem_util::malloc_gpu_buffer(kDataBufferSize, kGPU0),
             [](void* p) { gpu_mem_util::free_gpu_buffer(p, kGPU0); }
         ),
         kDataBufferSize
     );
-    rdma_util::Arc<rdma_util::MemoryRegion> data_mr1 = rdma_util::MemoryRegion::create(
+    std::shared_ptr<rdma_util::MemoryRegion> data_mr1 = rdma_util::MemoryRegion::create(
         pd1,
-        rdma_util::Arc<void>(
+        std::shared_ptr<void>(
             gpu_mem_util::malloc_gpu_buffer(kDataBufferSize, kGPU1),
             [](void* p) { gpu_mem_util::free_gpu_buffer(p, kGPU1); }
         ),
         kDataBufferSize
     );
-    rdma_util::Arc<rdma_util::MemoryRegion> data_mr2 = rdma_util::MemoryRegion::create(
+    std::shared_ptr<rdma_util::MemoryRegion> data_mr2 = rdma_util::MemoryRegion::create(
         pd2,
-        rdma_util::Arc<void>(
+        std::shared_ptr<void>(
             gpu_mem_util::malloc_gpu_buffer(kDataBufferSize, kGPU2),
             [](void* p) { gpu_mem_util::free_gpu_buffer(p, kGPU2); }
         ),
