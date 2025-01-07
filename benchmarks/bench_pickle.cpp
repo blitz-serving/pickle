@@ -109,15 +109,16 @@ int main() {
     std::shared_ptr<pickle::Flusher> flusher = pickle::Flusher::create(qp2->get_pd());
 
     auto sender = pickle::PickleSender::create(std::move(qp1));
-    auto recver = pickle::PickleRecver::create(std::move(qp2), nullptr);
+    auto recver = pickle::PickleRecver::create(std::move(qp2), flusher);
 
     std::thread thread_reporter(reporter_thread);
     std::thread thread_sender(sender_thread, sender, data_mr1, 20250102);
     std::thread thread_recver(recver_thread, recver, data_mr2, 20250102);
-    std::thread thread_poller([sender, recver] {
+    std::thread thread_poller([sender, recver, flusher] {
         while (!(recver_exited.load() && sender_exited.load())) {
             sender->poll();
             recver->poll();
+            flusher->poll();
         }
     });
 

@@ -11,8 +11,19 @@
 
 namespace pickle {
 
+union wrid_t {
+    struct alignas(8) {
+        uint16_t padding_ : 15;
+        bool request_finished : 1;
+        uint16_t doorbell_length : 16;
+        uint32_t stream_id : 32;
+    } wr_id;
+
+    uint64_t value;
+};
+
 struct alignas(64) Cacheline {
-    uint8_t data[8];
+    uint8_t data[64];
 };
 
 std::shared_ptr<PickleSender> PickleSender::create(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false
@@ -141,33 +152,38 @@ void PickleSender::poll() noexcept(false) {
 
             uint32_t write_size;
             ibv_wr_opcode opcode;
-            uint64_t wr_id;
+            wrid_t wr_id;
 
             if (llength <= this->packet_size_) {
                 // The last packet of the request
                 opcode = ibv_wr_opcode::IBV_WR_RDMA_WRITE_WITH_IMM;
                 write_size = llength;
-                wr_id = (uint64_t(1) << 63) | (uint64_t(doorbell_length) << 32) | stream_id;
+                wr_id.wr_id.doorbell_length = doorbell_length;
+                wr_id.wr_id.stream_id = stream_id;
+                wr_id.wr_id.request_finished = 1;
                 pending_remote_recv_request_queue.pop();
                 this->pending_local_send_request_map_[stream_id].pop();
             } else {
                 // The intermediate packet of the request
                 opcode = ibv_wr_opcode::IBV_WR_RDMA_WRITE;
                 write_size = this->packet_size_;
-                wr_id = (uint64_t(doorbell_length) << 32) | stream_id;
+                wr_id.wr_id.doorbell_length = doorbell_length;
+                wr_id.wr_id.stream_id = stream_id;
+                wr_id.wr_id.request_finished = 0;
                 remote_recv_request.addr += this->packet_size_;
                 remote_recv_request.length -= this->packet_size_;
                 local_send_request.addr += this->packet_size_;
                 local_send_request.length -= this->packet_size_;
             }
 
-            this->send_sge_list_[wr_list_index] = {};
+            memset(&(this->send_sge_list_[wr_list_index]), 0, sizeof(ibv_sge));
+            memset(&(this->send_wr_list_[wr_list_index]), 0, sizeof(ibv_send_wr));
+
             this->send_sge_list_[wr_list_index].addr = laddr;
             this->send_sge_list_[wr_list_index].lkey = lkey;
             this->send_sge_list_[wr_list_index].length = write_size;
 
-            this->send_wr_list_[wr_list_index] = {};
-            this->send_wr_list_[wr_list_index].wr_id = wr_id;
+            this->send_wr_list_[wr_list_index].wr_id = wr_id.value;
             this->send_wr_list_[wr_list_index].opcode = opcode;
             this->send_wr_list_[wr_list_index].imm_data = htonl(stream_id);
             this->send_wr_list_[wr_list_index].wr.rdma.remote_addr = raddr;
@@ -210,10 +226,14 @@ void PickleSender::poll() noexcept(false) {
                 int(wc.status),
                 int(wc.opcode)
             );
-            uint64_t wr_id = wc.wr_id;
-            uint16_t doorbell_length = (wr_id >> 32) & 0xFFFF;
-            bool request_finished = (wr_id >> 63) & 0x1;
-            uint32_t stream_id = wr_id & 0xFFFFFFFF;
+
+            wrid_t wr_id;
+            wr_id.value = wc.wr_id;
+
+            uint16_t doorbell_length = wr_id.wr_id.doorbell_length;
+            bool request_finished = wr_id.wr_id.request_finished;
+            uint32_t stream_id = wr_id.wr_id.stream_id;
+
             this->wr_occupied_ -= doorbell_length;
             if (request_finished) {
                 this->pending_local_send_flag_map_[stream_id].front()->store(true);
