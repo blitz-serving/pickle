@@ -8,6 +8,7 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 
 static int get_log_level();
 
@@ -24,24 +25,19 @@ static int get_log_level() {
     if (log_level == nullptr) {
         return kLogLevelInfo;
     } else {
-        switch (log_level[0]) {
-            case 'T':
-            case 't':
-                return kLogLevelTrace;
-            case 'D':
-            case 'd':
-                return kLogLevelDebug;
-            case 'I':
-            case 'i':
-                return kLogLevelInfo;
-            case 'W':
-            case 'w':
-                return kLogLevelWarn;
-            case 'E':
-            case 'e':
-                return kLogLevelError;
-            default:
-                return kLogLevelInfo;
+        std::string log_level_str(log_level);
+        if (log_level_str == "TRACE" || log_level_str == "trace" || log_level_str == "Trace") {
+            return kLogLevelTrace;
+        } else if (log_level_str == "DEBUG" || log_level_str == "debug" || log_level_str == "Debug") {
+            return kLogLevelDebug;
+        } else if (log_level_str == "INFO" || log_level_str == "info" || log_level_str == "Info") {
+            return kLogLevelInfo;
+        } else if (log_level_str == "WARN" || log_level_str == "warn" || log_level_str == "Warn") {
+            return kLogLevelWarn;
+        } else if (log_level_str == "ERROR" || log_level_str == "error" || log_level_str == "Error") {
+            return kLogLevelError;
+        } else {
+            return kLogLevelInfo;
         }
     }
 }
@@ -120,18 +116,19 @@ static int get_log_level() {
         }                                                                                                       \
     }
 
-static inline const char* _pickle_format_() {
+static inline auto _pickle_format_() -> decltype("") {
     return "";
 }
 
 template<typename T>
-static inline T&& _pickle_format_(T&& f) {
+static inline auto _pickle_format_(T&& f) -> decltype(std::forward<T>(f)) {
     return std::forward<T>(f);
 }
 
 template<typename T, typename... Args>
-static inline std::string _pickle_format_(T&& f, Args&&... args) {
-    return ::fmt::vformat(f, ::fmt::make_format_args(args...));
+static inline auto _pickle_format_(T&& f, Args&&... args)
+    -> decltype(::fmt::vformat(std::forward<T>(f), ::fmt::make_format_args(args...))) {
+    return ::fmt::vformat(std::forward<T>(f), ::fmt::make_format_args(args...));
 }
 
 #endif
