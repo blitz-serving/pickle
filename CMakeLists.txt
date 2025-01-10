@@ -11,8 +11,13 @@ option(BUILD_BENCHMARKS "Build benchmarks" ON)
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 
 # Add third-party libraries
-add_subdirectory(third_party/fmt)
-add_subdirectory(third_party/concurrentqueue)
+if(NOT TARGET fmt)
+    add_subdirectory(third_party/fmt)
+endif()
+
+if(NOT TARGET concurrentqueue)
+    add_subdirectory(third_party/concurrentqueue)
+endif()
 
 if(BUILD_TESTS)
     add_subdirectory(third_party/googletest)
