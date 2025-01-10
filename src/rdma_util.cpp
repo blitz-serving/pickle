@@ -48,14 +48,14 @@ Context::Context(const char* dev_name) noexcept(false) {
 }
 
 Context::~Context() {
-    DEBUG("Destroying Context");
+    DEBUG("rdma_util::Context::~Context()");
     if (this->inner) {
         ibv_close_device(this->inner);
     }
 }
 
 std::unique_ptr<Context> Context::create(const char* dev_name) noexcept(false) {
-    DEBUG("Creating context for device: {}", dev_name);
+    DEBUG("rdma_util::Context::create() creating context using {}", dev_name);
     return std::unique_ptr<Context>(new Context(dev_name));
 }
 
@@ -72,7 +72,7 @@ std::unique_ptr<ProtectionDomain> ProtectionDomain::create(std::shared_ptr<Conte
 }
 
 ProtectionDomain::~ProtectionDomain() {
-    DEBUG("Destroying ProtectionDomain");
+    DEBUG("rdma_util::ProtectionDomain::~ProtectionDomain()");
     if (this->inner) {
         ibv_dealloc_pd(this->inner);
     }
@@ -87,7 +87,7 @@ CompletionQueue::CompletionQueue(std::shared_ptr<Context> context, int cqe) noex
 }
 
 CompletionQueue::~CompletionQueue() {
-    DEBUG("Destroying CompletionQueue");
+    DEBUG("rdma_util::CompletionQueue::~CompletionQueue()");
     if (this->inner) {
         ibv_destroy_cq(this->inner);
     }
@@ -149,7 +149,7 @@ std::unique_ptr<RcQueuePair> RcQueuePair::create(
 }
 
 RcQueuePair::~RcQueuePair() {
-    DEBUG("Destroying RcQueuePair");
+    DEBUG("rdma_util::RcQueuePair::~RcQueuePair()");
     if (this->inner) {
         ibv_destroy_qp(this->inner);
     }
@@ -665,7 +665,7 @@ MemoryRegion::MemoryRegion(std::shared_ptr<ProtectionDomain> pd, void* addr, uin
 }
 
 MemoryRegion::~MemoryRegion() {
-    DEBUG("Destroying MemoryRegion");
+    DEBUG("rdma_util::MemoryRegion::~MemoryRegion()");
     if (this->inner) {
         ibv_dereg_mr(this->inner);
     }

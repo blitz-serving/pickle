@@ -127,7 +127,5 @@ int main() {
     thread_recver.join();
     thread_poller.join();
 
-    INFO("All data received");
-
     return 0;
 }

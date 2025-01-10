@@ -56,7 +56,7 @@ PickleSender::PickleSender(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size
 }
 
 PickleSender::~PickleSender() {
-    DEBUG("Destroying PickleSender");
+    DEBUG("pickle::PickleSender::~PickleSender()");
 }
 
 Handle PickleSender::send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey) {
@@ -69,7 +69,7 @@ Handle PickleSender::send(uint32_t stream_id, uint64_t addr, uint32_t length, ui
     Command command {};
     command.ticket = ticket;
     command.flag = flag;
-    this->send_request_command_queue_.enqueue(command);
+    PICKLE_ASSERT(this->send_request_command_queue_.enqueue(command));
     return Handle(flag);
 }
 
@@ -210,16 +210,20 @@ void PickleSender::poll() noexcept(false) {
     }
 
     if (this->wr_occupied_ > wr_list_start) {
-        TRACE("Posting {} work requests", this->wr_occupied_ - wr_list_start);
         this->qp_->post_send_wrs(&(this->send_wr_list_[wr_list_start]));
+        TRACE("pickle::PickleSender::poll() posted {} work requests", this->wr_occupied_ - wr_list_start);
     }
 
     ret = this->qp_->poll_send_cq_once(kMagic, this->polled_send_wcs_);
 
     PICKLE_ASSERT(ret >= 0, "Failed to poll send CQ");
     if (ret > 0) {
-        TRACE("Polled {} signaled work completions", ret);
         for (const auto& wc : this->polled_send_wcs_) {
+            TRACE(
+                "pickle::PickleSender::poll() polled send_completion: status={}, opcode={}",
+                int(wc.status),
+                int(wc.opcode)
+            );
             PICKLE_ASSERT(
                 wc.status == ibv_wc_status::IBV_WC_SUCCESS && wc.opcode == ibv_wc_opcode::IBV_WC_RDMA_WRITE,
                 "Op write_with_imm failed: status={}, opcode={}",
@@ -271,7 +275,7 @@ PickleRecver::PickleRecver(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<Flus
 }
 
 PickleRecver::~PickleRecver() {
-    DEBUG("Destroying PickleRecver");
+    DEBUG("pickle::PickleRecver::~PickleRecver()");
 }
 
 std::shared_ptr<PickleRecver>
@@ -289,7 +293,7 @@ Handle PickleRecver::recv(uint32_t stream_id, uint64_t addr, uint32_t length, ui
     Command command {};
     command.ticket = ticket;
     command.flag = flag;
-    this->recv_request_command_queue_.enqueue(command);
+    PICKLE_ASSERT(this->recv_request_command_queue_.enqueue(command));
     return Handle(flag);
 }
 
@@ -325,6 +329,11 @@ void PickleRecver::poll() noexcept(false) {
 
     PICKLE_ASSERT(ret >= 0, "Failed to poll send CQ");
     for (const auto& wc : this->polled_send_wcs_) {
+        TRACE(
+            "pickle::PickleRecver::poll() polled send_completion: status={}, opcode={}",
+            int(wc.status),
+            int(wc.opcode)
+        );
         PICKLE_ASSERT(
             wc.status == ibv_wc_status::IBV_WC_SUCCESS && wc.opcode == ibv_wc_opcode::IBV_WC_SEND,
             "Op post_send_send failed: status={}, opcode={}",
@@ -337,6 +346,11 @@ void PickleRecver::poll() noexcept(false) {
 
     PICKLE_ASSERT(ret >= 0, "Failed to poll recv CQ");
     for (const auto& wc : this->polled_recv_wcs_) {
+        TRACE(
+            "pickle::PickleRecver::poll() polled recv_completion: status={}, opcode={}",
+            int(wc.status),
+            int(wc.opcode)
+        );
         PICKLE_ASSERT(
             wc.status == ibv_wc_status::IBV_WC_SUCCESS && wc.opcode == ibv_wc_opcode::IBV_WC_RECV_RDMA_WITH_IMM,
             "Failed to receive data: status={}, opcode={}",
@@ -344,7 +358,6 @@ void PickleRecver::poll() noexcept(false) {
             int(wc.opcode)
         );
         uint32_t stream_id = ntohl(wc.imm_data);
-        TRACE("Received data from stream {}", stream_id);
 
         std::queue<Command>& queue = this->pending_local_recv_request_map_[stream_id];
         Command command = queue.front();
@@ -361,7 +374,7 @@ void PickleRecver::poll() noexcept(false) {
     }
 }
 
-Flusher::Flusher(std::shared_ptr<ProtectionDomain>& pd) noexcept(false) : flush_infos_(16) {
+Flusher::Flusher(std::shared_ptr<ProtectionDomain>& pd) noexcept(false) : flush_infos_(16), pending_flushes_(0) {
     std::shared_ptr<rdma_util::CompletionQueue> cq = CompletionQueue::create(pd->get_context());
     this->loopback_qp_ = RcQueuePair::create(pd, cq, cq);
     this->loopback_qp_->bring_up(this->loopback_qp_->get_handshake_data());
@@ -373,7 +386,7 @@ Flusher::Flusher(std::shared_ptr<ProtectionDomain>& pd) noexcept(false) : flush_
 }
 
 Flusher::~Flusher() {
-    DEBUG("Destroying LoopbackFlusher");
+    DEBUG("pickle::Flusher::~Flusher()");
 }
 
 std::shared_ptr<Flusher> Flusher::create(std::shared_ptr<ProtectionDomain> pd) noexcept(false) {
@@ -381,11 +394,12 @@ std::shared_ptr<Flusher> Flusher::create(std::shared_ptr<ProtectionDomain> pd) n
 }
 
 void Flusher::append(uint32_t rkey, uint64_t raddr, std::shared_ptr<std::atomic<bool>> flag) {
+    TRACE("pickle::Flusher::append() append FlushInfo: rkey={}, raddr={}", rkey, raddr);
     FlushInfo info {};
     info.rkey = rkey;
     info.raddr = raddr;
     info.flag = flag;
-    this->info_queue_.enqueue(info);
+    PICKLE_ASSERT(this->info_queue_.enqueue(info));
 }
 
 void Flusher::poll() noexcept(false) {
@@ -393,6 +407,7 @@ void Flusher::poll() noexcept(false) {
         int ret = this->loopback_qp_->poll_send_cq_once(kMagic, this->polled_wcs_);
         PICKLE_ASSERT(ret >= 0);
         for (const ibv_wc& wc : this->polled_wcs_) {
+            TRACE("pickle::Flusher::poll() polled_completion: status={}, opcode={}", int(wc.status), int(wc.opcode));
             PICKLE_ASSERT(
                 wc.status == ibv_wc_status::IBV_WC_SUCCESS && wc.opcode == ibv_wc_opcode::IBV_WC_RDMA_READ,
                 "Failed to flush data: status={}, opcode={}",
@@ -409,6 +424,11 @@ void Flusher::poll() noexcept(false) {
         uint64_t count_dequeued =
             this->info_queue_.try_dequeue_bulk(this->flush_infos_.begin(), 16 - this->pending_flushes_);
         for (uint64_t i = 0; i < count_dequeued; ++i) {
+            TRACE(
+                "pickle::Flusher::poll() posted_send_read: rkey={}, raddr={}",
+                this->flush_infos_[i].rkey,
+                this->flush_infos_[i].raddr
+            );
             this->pending_flushes_++;
             FlushInfo& info = this->flush_infos_[i];
             this->flushing_queue_.push(info.flag);
