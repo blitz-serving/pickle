@@ -159,25 +159,31 @@ ibv_qp_state RcQueuePair::query_qp_state() noexcept(false) {
     ibv_qp_attr attr;
     ibv_qp_init_attr init_attr;
     if (ibv_query_qp(this->inner, &attr, ibv_qp_attr_mask::IBV_QP_STATE, &init_attr)) {
-        throw std::runtime_error("Failed to query QP state");
+        char buf[128];
+        sprintf(buf, "Failed to query QP state. Errno(%d): %s", errno, strerror(errno));
+        throw std::runtime_error(buf);
     } else {
         return attr.qp_state;
     }
 }
 
-HandshakeData RcQueuePair::get_handshake_data() noexcept(false) {
+HandshakeData RcQueuePair::get_handshake_data(uint32_t gid_index) noexcept(false) {
     ibv_qp_attr attr_ {};
 
     attr_.ah_attr.static_rate = ibv_rate::IBV_RATE_100_GBPS;
     ibv_modify_qp(this->inner, &attr_, ibv_qp_attr_mask::IBV_QP_RATE_LIMIT);
 
     ibv_gid gid;
-    if (ibv_query_gid(this->context_->inner, 1, 0, &gid)) {
-        throw std::runtime_error("Failed to query gid");
+    if (ibv_query_gid(this->context_->inner, 1, gid_index, &gid)) {
+        char buf[128];
+        sprintf(buf, "Failed to query gid. Errno(%d): %s", errno, strerror(errno));
+        throw std::runtime_error(buf);
     }
     ibv_port_attr attr;
     if (ibv_query_port(this->context_->inner, 1, &attr)) {
-        throw std::runtime_error("Failed to query port");
+        char buf[128];
+        sprintf(buf, "Failed to query port. Errno(%d): %s", errno, strerror(errno));
+        throw std::runtime_error(buf);
     }
 
     HandshakeData handshake_data {};
@@ -187,7 +193,7 @@ HandshakeData RcQueuePair::get_handshake_data() noexcept(false) {
     return handshake_data;
 }
 
-void RcQueuePair::bring_up(const HandshakeData& handshake_data, ibv_rate rate) noexcept(false) {
+void RcQueuePair::bring_up(const HandshakeData& handshake_data, uint32_t gid_index, ibv_rate rate) noexcept(false) {
     ibv_gid gid = handshake_data.gid;
     uint16_t lid = handshake_data.lid;
     uint32_t remote_qp_num = handshake_data.qp_num;
@@ -234,19 +240,25 @@ void RcQueuePair::bring_up(const HandshakeData& handshake_data, ibv_rate rate) n
         attr.path_mtu = ibv_mtu::IBV_MTU_4096;
         attr.rq_psn = remote_qp_num;
         attr.dest_qp_num = remote_qp_num;
-        attr.ah_attr.grh.dgid = gid;
-        attr.ah_attr.grh.flow_label = 0;
-        attr.ah_attr.grh.sgid_index = 0;
-        attr.ah_attr.grh.hop_limit = 255;
-        attr.ah_attr.dlid = lid;
+
+        // No need to set sgid_index for Infiband
+        // But it is required for RoCE
+        attr.ah_attr.grh.sgid_index = gid_index;
+
         attr.ah_attr.is_global = 1;
         attr.ah_attr.port_num = 1;
+        attr.ah_attr.grh.dgid = gid;
+        attr.ah_attr.grh.flow_label = 0;
+        attr.ah_attr.grh.hop_limit = 255;
+        attr.ah_attr.dlid = lid;
         attr.ah_attr.static_rate = rate;
         attr.max_dest_rd_atomic = 16;
         attr.min_rnr_timer = 0;
 
         if (ibv_modify_qp(this->inner, &attr, mask)) {
-            throw std::runtime_error("Failed to modify to RTR");
+            char buf[128] {};
+            sprintf(buf, "Failed to modify to RTR. Errno(%d): %s", errno, strerror(errno));
+            throw std::runtime_error(buf);
         }
     }
 
@@ -265,7 +277,9 @@ void RcQueuePair::bring_up(const HandshakeData& handshake_data, ibv_rate rate) n
         attr.rnr_retry = 7;
 
         if (ibv_modify_qp(this->inner, &attr, mask)) {
-            throw std::runtime_error("Failed to modify to RTS");
+            char buf[128] {};
+            sprintf(buf, "Failed to modify to RTS. Errno(%d): %s", errno, strerror(errno));
+            throw std::runtime_error(buf);
         }
     }
 }

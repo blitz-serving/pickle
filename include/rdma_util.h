@@ -3,6 +3,7 @@
 
 #include <infiniband/verbs.h>
 
+#include <cstdint>
 #include <map>
 #include <memory>
 #include <queue>
@@ -163,9 +164,25 @@ public:
 
     ibv_qp_state query_qp_state() noexcept(false);
 
-    HandshakeData get_handshake_data() noexcept(false);
+    /**
+     * @brief get the handshake data of the RC queue pair
+     *
+     * @param sgid_index index of the source GID to use. Manual setting is required for RoCE.
+     */
+    HandshakeData get_handshake_data(uint32_t gid_index = 0) noexcept(false);
 
-    void bring_up(const HandshakeData& handshake_data, ibv_rate rate = ibv_rate::IBV_RATE_MAX) noexcept(false);
+    /**
+     * @brief bring up an RC queue pair with the given handshake data
+     * 
+     * @param handshake_data handshake data from the remote RC queue pair
+     * @param sgid_index index of the source GID to use. Manual setting is required for RoCE.
+     * @param rate rate limit for the queue pair. Default is IBV_RATE_MAX
+     */
+    void bring_up(
+        const HandshakeData& handshake_data,
+        uint32_t gid_index = 0,
+        ibv_rate rate = ibv_rate::IBV_RATE_MAX
+    ) noexcept(false);
 
     int post_send_send(uint64_t wr_id, uint64_t laddr, uint32_t length, uint32_t lkey, bool signaled) noexcept;
 
