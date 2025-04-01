@@ -12,10 +12,10 @@
 #include "pickle.h"
 #include "pickle_logger.h"
 
-constexpr const char* kRNIC1 = "mlx5_0";
-constexpr const char* kRNIC2 = "mlx5_0";
+constexpr const char* kRNIC1 = "mlx5_1";
+constexpr const char* kRNIC2 = "mlx5_2";
 constexpr const uint32_t kGPU1 = 0;
-constexpr const uint32_t kGPU2 = 1;
+constexpr const uint32_t kGPU2 = 2;
 
 constexpr const uint64_t kDataBufferSize = 1ull * 75 * 1024 * 1024 * 1024;
 constexpr const uint32_t kChunkSize = 1ull * 1024 * 1024;
@@ -86,8 +86,8 @@ int main() {
     auto qp1 = rdma_util::RcQueuePair::create(kRNIC1);
     auto qp2 = rdma_util::RcQueuePair::create(kRNIC2);
 
-    qp1->bring_up(qp2->get_handshake_data(), kRate);
-    qp2->bring_up(qp1->get_handshake_data(), kRate);
+    qp1->bring_up(qp2->get_handshake_data(3), 3, kRate);
+    qp2->bring_up(qp1->get_handshake_data(3), 3, kRate);
 
     std::shared_ptr<rdma_util::MemoryRegion> data_mr1 = rdma_util::MemoryRegion::create(
         qp1->get_pd(),

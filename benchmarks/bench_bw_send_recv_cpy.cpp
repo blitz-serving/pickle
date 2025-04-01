@@ -40,11 +40,11 @@ int main() {
         std::vector<std::shared_ptr<rdma_util::RcQueuePair>> qp_list_2;
 
         std::shared_ptr<rdma_util::ProtectionDomain> pd1 =
-            rdma_util::ProtectionDomain::create(std::move(rdma_util::Context::create(kRNIC1)));
+            rdma_util::ProtectionDomain::create(rdma_util::Context::create(kRNIC1));
         std::shared_ptr<rdma_util::MemoryRegion> mr1 = rdma_util::MemoryRegion::create(pd1, send_buffer, kBufferSize);
 
         std::shared_ptr<rdma_util::ProtectionDomain> pd2 =
-            rdma_util::ProtectionDomain::create(std::move(rdma_util::Context::create(kRNIC2)));
+            rdma_util::ProtectionDomain::create(rdma_util::Context::create(kRNIC2));
         std::shared_ptr<rdma_util::MemoryRegion> mr2 = rdma_util::MemoryRegion::create(pd2, recv_buffer, kBufferSize);
 
         printf("mr1: %p\n", mr1->get_addr());
@@ -53,8 +53,8 @@ int main() {
         std::shared_ptr<rdma_util::RcQueuePair> qp1 = rdma_util::RcQueuePair::create(pd1);
         std::shared_ptr<rdma_util::RcQueuePair> qp2 = rdma_util::RcQueuePair::create(pd2);
 
-        qp1->bring_up(qp2->get_handshake_data());
-        qp2->bring_up(qp1->get_handshake_data());
+        qp1->bring_up(qp2->get_handshake_data(3), 3);
+        qp2->bring_up(qp1->get_handshake_data(3), 3);
 
         auto t1 = std::thread(sender_thread, qp1, mr1);
         auto t2 = std::thread(recver_thread, qp2, mr2);

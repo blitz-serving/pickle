@@ -107,10 +107,10 @@ private:
     PickleSender(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false);
 
 public:
+    ~PickleSender() = default;
+
     static std::shared_ptr<PickleSender>
     create(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size = 256 * 1024) noexcept(false);
-
-    ~PickleSender();
 
     [[nodiscard]] Handle send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
 
@@ -147,9 +147,9 @@ private:
     Flusher(std::shared_ptr<ProtectionDomain>& pd) noexcept(false);
 
 public:
-    static std::shared_ptr<Flusher> create(std::shared_ptr<ProtectionDomain> pd) noexcept(false);
+    ~Flusher() = default;
 
-    ~Flusher();
+    static std::shared_ptr<Flusher> create(std::shared_ptr<ProtectionDomain> pd) noexcept(false);
 
     void append(uint32_t rkey, uint64_t raddr, std::shared_ptr<std::atomic<bool>> flag);
 
@@ -187,10 +187,10 @@ private:
     PickleRecver(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<Flusher> flusher) noexcept(false);
 
 public:
+    ~PickleRecver() = default;
+
     static std::shared_ptr<PickleRecver>
     create(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<Flusher> flusher = nullptr) noexcept(false);
-
-    ~PickleRecver();
 
     [[nodiscard]] Handle recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);
 

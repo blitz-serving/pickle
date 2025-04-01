@@ -9,8 +9,8 @@ int main() {
     auto buffer = new uint8_t[size];
 
     {
-        auto qp1 = rdma_util::RcQueuePair::create("mlx5_0");
-        auto qp2 = rdma_util::RcQueuePair::create("mlx5_5");
+        auto qp1 = rdma_util::RcQueuePair::create("mlx5_1");
+        auto qp2 = rdma_util::RcQueuePair::create("mlx5_2");
 
         auto mr1 = rdma_util::MemoryRegion::create(qp1->get_pd(), buffer, size);
         auto mr2 = rdma_util::MemoryRegion::create(qp2->get_pd(), buffer, size);

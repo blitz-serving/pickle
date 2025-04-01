@@ -11,6 +11,8 @@
 
 namespace pickle {
 
+using namespace std;
+
 union wrid_t {
     struct alignas(8) {
         uint16_t padding_ : 15;
@@ -26,21 +28,20 @@ struct alignas(64) Cacheline {
     uint8_t data[64];
 };
 
-std::shared_ptr<PickleSender> PickleSender::create(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false
-) {
-    return std::shared_ptr<PickleSender>(new PickleSender(std::move(qp), packet_size));
+shared_ptr<PickleSender> PickleSender::create(unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false) {
+    return shared_ptr<PickleSender>(new PickleSender(std::move(qp), packet_size));
 }
 
-PickleSender::PickleSender(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false) :
-    qp_(std::move(qp)),
+PickleSender::PickleSender(unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false) :
     packet_size_(packet_size),
+    qp_(std::move(qp)),
     wr_occupied_(0) {
     this->send_wr_list_.resize(kMagic);
     this->send_sge_list_.resize(kMagic);
 
     this->host_recv_buffer_ = MemoryRegion::create(
         this->qp_->get_pd(),
-        std::shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
+        shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
         sizeof(Ticket) * kMagic
     );
     this->recv_buffer_addr_ = uint64_t(this->host_recv_buffer_->get_addr());
@@ -55,12 +56,8 @@ PickleSender::PickleSender(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size
     }
 }
 
-PickleSender::~PickleSender() {
-    DEBUG("pickle::PickleSender::~PickleSender()");
-}
-
 Handle PickleSender::send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey) {
-    auto flag = std::make_shared<std::atomic<bool>>(false);
+    auto flag = make_shared<atomic<bool>>(false);
     Ticket ticket {};
     ticket.stream_id = stream_id;
     ticket.addr = addr;
@@ -96,8 +93,8 @@ void PickleSender::poll() noexcept(false) {
         );
     }
 
-    std::vector<Command> commands(kMagic);
-    std::vector<Ticket> tickets(kMagic);
+    vector<Command> commands(kMagic);
+    vector<Ticket> tickets(kMagic);
 
     // Received from send request
     uint64_t count_dequeued = this->send_request_command_queue_.try_dequeue_bulk(commands.begin(), kMagic);
@@ -109,7 +106,7 @@ void PickleSender::poll() noexcept(false) {
     }
 
     // Received from thread_post_recv
-    int count_poped = 0;
+    uint64_t count_poped = 0;
     while (!this->remote_recv_request_queue_.empty() && count_poped < kMagic) {
         tickets[count_poped] = this->remote_recv_request_queue_.front();
         this->remote_recv_request_queue_.pop();
@@ -129,8 +126,8 @@ void PickleSender::poll() noexcept(false) {
         }
 
         uint32_t stream_id = item.first;
-        std::queue<Ticket>& pending_remote_recv_request_queue = item.second;
-        std::queue<Ticket>& pending_local_send_request_queue = this->pending_local_send_request_map_[stream_id];
+        queue<Ticket>& pending_remote_recv_request_queue = item.second;
+        queue<Ticket>& pending_local_send_request_queue = this->pending_local_send_request_map_[stream_id];
 
         while (this->wr_occupied_ < this->send_wr_list_.size() && !pending_remote_recv_request_queue.empty()
                && !pending_local_send_request_queue.empty()) {
@@ -215,7 +212,6 @@ void PickleSender::poll() noexcept(false) {
     }
 
     ret = this->qp_->poll_send_cq_once(kMagic, this->polled_send_wcs_);
-
     PICKLE_ASSERT(ret >= 0, "Failed to poll send CQ");
     if (ret > 0) {
         for (const auto& wc : this->polled_send_wcs_) {
@@ -247,7 +243,7 @@ void PickleSender::poll() noexcept(false) {
     }
 }
 
-PickleRecver::PickleRecver(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<Flusher> flusher) noexcept(false) :
+PickleRecver::PickleRecver(unique_ptr<RcQueuePair> qp, shared_ptr<Flusher> flusher) noexcept(false) :
     count_pending_requests_(0),
     qp_(std::move(qp)),
     polled_send_wcs_(kMagic),
@@ -255,7 +251,7 @@ PickleRecver::PickleRecver(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<Flus
     flusher_(flusher) {
     this->host_send_buffer_ = MemoryRegion::create(
         this->qp_->get_pd(),
-        std::shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
+        shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
         sizeof(Ticket) * kMagic
     );
     this->send_buffer_addr_ = uint64_t(this->host_send_buffer_->get_addr());
@@ -263,7 +259,7 @@ PickleRecver::PickleRecver(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<Flus
 
     this->host_recv_buffer_ = MemoryRegion::create(
         this->qp_->get_pd(),
-        std::shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
+        shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
         sizeof(Ticket) * kMagic
     );
     this->recv_buffer_addr_ = uint64_t(this->host_recv_buffer_->get_addr());
@@ -274,17 +270,12 @@ PickleRecver::PickleRecver(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<Flus
     }
 }
 
-PickleRecver::~PickleRecver() {
-    DEBUG("pickle::PickleRecver::~PickleRecver()");
-}
-
-std::shared_ptr<PickleRecver>
-PickleRecver::create(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<Flusher> flusher) noexcept(false) {
-    return std::shared_ptr<PickleRecver>(new PickleRecver(std::move(qp), flusher));
+shared_ptr<PickleRecver> PickleRecver::create(unique_ptr<RcQueuePair> qp, shared_ptr<Flusher> flusher) noexcept(false) {
+    return shared_ptr<PickleRecver>(new PickleRecver(std::move(qp), flusher));
 }
 
 Handle PickleRecver::recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey) {
-    auto flag = std::make_shared<std::atomic<bool>>(false);
+    auto flag = make_shared<atomic<bool>>(false);
     Ticket ticket {};
     ticket.stream_id = stream_id;
     ticket.addr = addr;
@@ -298,8 +289,8 @@ Handle PickleRecver::recv(uint32_t stream_id, uint64_t addr, uint32_t length, ui
 }
 
 void PickleRecver::poll() noexcept(false) {
-    std::vector<Command> commands(kMagic);
-    std::vector<Ticket> tickets(kMagic);
+    vector<Command> commands(kMagic);
+    vector<Ticket> tickets(kMagic);
 
     uint64_t count_dequeued = this->recv_request_command_queue_.try_dequeue_bulk(commands.begin(), kMagic);
     for (uint64_t i = 0; i < count_dequeued; ++i) {
@@ -359,7 +350,7 @@ void PickleRecver::poll() noexcept(false) {
         );
         uint32_t stream_id = ntohl(wc.imm_data);
 
-        std::queue<Command>& queue = this->pending_local_recv_request_map_[stream_id];
+        queue<Command>& queue = this->pending_local_recv_request_map_[stream_id];
         Command command = queue.front();
         queue.pop();
         this->count_pending_requests_--;
@@ -374,26 +365,19 @@ void PickleRecver::poll() noexcept(false) {
     }
 }
 
-Flusher::Flusher(std::shared_ptr<ProtectionDomain>& pd) noexcept(false) : flush_infos_(16), pending_flushes_(0) {
-    std::shared_ptr<rdma_util::CompletionQueue> cq = CompletionQueue::create(pd->get_context());
+Flusher::Flusher(shared_ptr<ProtectionDomain>& pd) noexcept(false) : pending_flushes_(0), flush_infos_(16) {
+    shared_ptr<rdma_util::CompletionQueue> cq = CompletionQueue::create(pd->get_context());
     this->loopback_qp_ = RcQueuePair::create(pd, cq, cq);
     this->loopback_qp_->bring_up(this->loopback_qp_->get_handshake_data());
-    this->loopback_buffer_ = MemoryRegion::create(
-        pd,
-        std::shared_ptr<void>(new Cacheline, [](Cacheline* p) { delete p; }),
-        sizeof(Cacheline)
-    );
+    this->loopback_buffer_ =
+        MemoryRegion::create(pd, shared_ptr<void>(new Cacheline, [](Cacheline* p) { delete p; }), sizeof(Cacheline));
 }
 
-Flusher::~Flusher() {
-    DEBUG("pickle::Flusher::~Flusher()");
+shared_ptr<Flusher> Flusher::create(shared_ptr<ProtectionDomain> pd) noexcept(false) {
+    return shared_ptr<Flusher>(new Flusher(pd));
 }
 
-std::shared_ptr<Flusher> Flusher::create(std::shared_ptr<ProtectionDomain> pd) noexcept(false) {
-    return std::shared_ptr<Flusher>(new Flusher(pd));
-}
-
-void Flusher::append(uint32_t rkey, uint64_t raddr, std::shared_ptr<std::atomic<bool>> flag) {
+void Flusher::append(uint32_t rkey, uint64_t raddr, shared_ptr<atomic<bool>> flag) {
     TRACE("pickle::Flusher::append() append FlushInfo: rkey={}, raddr={}", rkey, raddr);
     FlushInfo info {};
     info.rkey = rkey;

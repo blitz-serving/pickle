@@ -1,7 +1,10 @@
+#include <cuda_runtime.h>
+
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <thread>
 #include <vector>
 
@@ -16,7 +19,7 @@ constexpr uint64_t kThreadNum = 1;
 static std::atomic<uint64_t> g_bytes_transferred(0);
 
 constexpr const char* kDevice1 = "mlx5_1";
-constexpr const char* kDevice2 = "mlx5_5";
+constexpr const char* kDevice2 = "mlx5_2";
 
 int reporter_thread();
 int read_thread(
@@ -25,9 +28,49 @@ int read_thread(
     std::shared_ptr<rdma_util::MemoryRegion> remote_mr
 );
 
+struct Buffer {
+    void* ptr;
+    size_t size;
+    std::function<void(void*)> deleter;
+
+    void* get_ptr() {
+        return ptr;
+    }
+
+    Buffer(void* p, size_t s, std::function<void(void*)> d) : ptr(p), size(s), deleter(d) {}
+
+    ~Buffer() {
+        deleter(ptr);
+    }
+};
+
 int main() {
-    auto send_buffer = malloc(kBufferSize);
-    auto recv_buffer = malloc(kBufferSize);
+    auto send_buffer = Buffer(
+        []() {
+            void* p = nullptr;
+            cudaSetDevice(0);
+            cudaMalloc(&p, kBufferSize);
+            return p;
+        }(),
+        kBufferSize,
+        [](void* p) { cudaFree(p); }
+    );
+    auto recv_buffer = Buffer(
+        []() {
+            void* p = nullptr;
+            cudaSetDevice(2);
+            cudaMalloc(&p, kBufferSize);
+            return p;
+        }(),
+        kBufferSize,
+        [](void* p) { cudaFree(p); }
+    );
+
+    // auto send_buffer = Buffer(malloc(kBufferSize), kBufferSize, [](void* p) { free(p); });
+    // auto recv_buffer = Buffer(malloc(kBufferSize), kBufferSize, [](void* p) { free(p); });
+
+    auto send_buffer_ptr = send_buffer.get_ptr();
+    auto recv_buffer_ptr = recv_buffer.get_ptr();
 
     {
         std::vector<std::shared_ptr<rdma_util::RcQueuePair>> qp_list_1;
@@ -37,18 +80,20 @@ int main() {
 
         std::shared_ptr<rdma_util::ProtectionDomain> pd1 =
             rdma_util::ProtectionDomain::create(rdma_util::Context::create(kDevice1));
-        std::shared_ptr<rdma_util::MemoryRegion> mr1 = rdma_util::MemoryRegion::create(pd1, send_buffer, kBufferSize);
+        std::shared_ptr<rdma_util::MemoryRegion> mr1 =
+            rdma_util::MemoryRegion::create(pd1, send_buffer_ptr, kBufferSize);
 
         std::shared_ptr<rdma_util::ProtectionDomain> pd2 =
             rdma_util::ProtectionDomain::create(rdma_util::Context::create(kDevice2));
-        std::shared_ptr<rdma_util::MemoryRegion> mr2 = rdma_util::MemoryRegion::create(pd2, recv_buffer, kBufferSize);
+        std::shared_ptr<rdma_util::MemoryRegion> mr2 =
+            rdma_util::MemoryRegion::create(pd2, recv_buffer_ptr, kBufferSize);
 
         for (uint64_t i = 0; i < kThreadNum; ++i) {
             std::shared_ptr<rdma_util::RcQueuePair> qp1 = rdma_util::RcQueuePair::create(pd1);
             std::shared_ptr<rdma_util::RcQueuePair> qp2 = rdma_util::RcQueuePair::create(pd2);
 
-            qp1->bring_up(qp2->get_handshake_data());
-            qp2->bring_up(qp1->get_handshake_data());
+            qp1->bring_up(qp2->get_handshake_data(3), 3);
+            qp2->bring_up(qp1->get_handshake_data(3), 3);
 
             qp_list_1.push_back(qp1);
             qp_list_2.push_back(qp2);
@@ -64,9 +109,6 @@ int main() {
             thread.join();
         }
     }
-
-    free(send_buffer);
-    free(recv_buffer);
 
     return 0;
 }
