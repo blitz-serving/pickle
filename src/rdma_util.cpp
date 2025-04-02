@@ -565,30 +565,6 @@ int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, std::vector<WorkComple
     return ret;
 }
 
-int RcQueuePair::poll_send_cq_once(const int max_num_wcs, ibv_wc* wc_buffer, std::vector<WorkCompletion>& polled_wcs) {
-    if (polled_wcs.size() > 0) {
-        polled_wcs.clear();
-    }
-
-    ibv_wc* work_completions = wc_buffer;
-
-    int ret = ibv_poll_cq(this->inner->send_cq, max_num_wcs, work_completions);
-
-    if (ret > 0) {
-        for (int i = 0; i < ret; ++i) {
-            WorkCompletion work_completion {};
-            work_completion.wr_id = work_completions[i].wr_id;
-            work_completion.status = work_completions[i].status;
-            work_completion.byte_len = work_completions[i].byte_len;
-            work_completion.opcode = work_completions[i].opcode;
-            work_completion.imm_data = ntohl(work_completions[i].imm_data);
-            polled_wcs.push_back(work_completion);
-        }
-    }
-
-    return ret;
-}
-
 int RcQueuePair::poll_send_cq_once(const int max_num_wcs, std::vector<ibv_wc>& polled_wcs) {
     polled_wcs.resize(max_num_wcs);
     int ret = ibv_poll_cq(this->inner->send_cq, max_num_wcs, polled_wcs.data());
@@ -597,30 +573,6 @@ int RcQueuePair::poll_send_cq_once(const int max_num_wcs, std::vector<ibv_wc>& p
     } else {
         polled_wcs.resize(ret);
     }
-    return ret;
-}
-
-int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, ibv_wc* wc_buffer, std::vector<WorkCompletion>& polled_wcs) {
-    if (polled_wcs.size() > 0) {
-        polled_wcs.clear();
-    }
-
-    ibv_wc* work_completions = wc_buffer;
-
-    int ret = ibv_poll_cq(this->inner->recv_cq, max_num_wcs, work_completions);
-
-    if (ret > 0) {
-        for (int i = 0; i < ret; ++i) {
-            WorkCompletion work_completion {};
-            work_completion.wr_id = work_completions[i].wr_id;
-            work_completion.status = work_completions[i].status;
-            work_completion.byte_len = work_completions[i].byte_len;
-            work_completion.opcode = work_completions[i].opcode;
-            work_completion.imm_data = ntohl(work_completions[i].imm_data);
-            polled_wcs.push_back(work_completion);
-        }
-    }
-
     return ret;
 }
 

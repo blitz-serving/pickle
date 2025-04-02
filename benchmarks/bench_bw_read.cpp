@@ -18,8 +18,8 @@ constexpr uint64_t kThreadNum = 1;
 
 static std::atomic<uint64_t> g_bytes_transferred(0);
 
-constexpr const char* kDevice1 = "mlx5_1";
-constexpr const char* kDevice2 = "mlx5_2";
+constexpr const char* kDevice1 = "mlx5_3";
+constexpr const char* kDevice2 = "mlx5_4";
 
 int reporter_thread();
 int read_thread(
@@ -37,45 +37,52 @@ struct Buffer {
         return ptr;
     }
 
-    Buffer(void* p, size_t s, std::function<void(void*)> d) : ptr(p), size(s), deleter(d) {}
+    Buffer(void* p, size_t s, std::function<void(void*)> d) : ptr(p), size(s), deleter(d) {
+        if (ptr == nullptr) {
+            throw std::runtime_error("Buffer pointer is null");
+        }
+    }
 
     ~Buffer() {
         deleter(ptr);
+        printf("Buffer deleted\n");
     }
 };
 
 int main() {
-    auto send_buffer = Buffer(
-        []() {
-            void* p = nullptr;
-            cudaSetDevice(0);
-            cudaMalloc(&p, kBufferSize);
-            return p;
-        }(),
-        kBufferSize,
-        [](void* p) { cudaFree(p); }
-    );
-    auto recv_buffer = Buffer(
-        []() {
-            void* p = nullptr;
-            cudaSetDevice(2);
-            cudaMalloc(&p, kBufferSize);
-            return p;
-        }(),
-        kBufferSize,
-        [](void* p) { cudaFree(p); }
-    );
+    // auto send_buffer = Buffer(
+    //     []() {
+    //         void* p = nullptr;
+    //         cudaSetDevice(0);
+    //         cudaMalloc(&p, kBufferSize);
+    //         return p;
+    //     }(),
+    //     kBufferSize,
+    //     [](void* p) { cudaFree(p); }
+    // );
+    // auto recv_buffer = Buffer(
+    //     []() {
+    //         void* p = nullptr;
+    //         cudaSetDevice(2);
+    //         cudaMalloc(&p, kBufferSize);
+    //         return p;
+    //     }(),
+    //     kBufferSize,
+    //     [](void* p) { cudaFree(p); }
+    // );
 
-    // auto send_buffer = Buffer(malloc(kBufferSize), kBufferSize, [](void* p) { free(p); });
-    // auto recv_buffer = Buffer(malloc(kBufferSize), kBufferSize, [](void* p) { free(p); });
+    auto send_buffer = Buffer(malloc(kBufferSize), kBufferSize, [](void* p) { free(p); });
+    auto recv_buffer = Buffer(malloc(kBufferSize), kBufferSize, [](void* p) { free(p); });
 
     auto send_buffer_ptr = send_buffer.get_ptr();
     auto recv_buffer_ptr = recv_buffer.get_ptr();
 
+    printf("send_buffer_addr: %p\n", send_buffer_ptr);
+    printf("recv_buffer_addr: %p\n", recv_buffer_ptr);
+
     {
         std::vector<std::shared_ptr<rdma_util::RcQueuePair>> qp_list_1;
         std::vector<std::shared_ptr<rdma_util::RcQueuePair>> qp_list_2;
-
         std::vector<std::thread> threads;
 
         std::shared_ptr<rdma_util::ProtectionDomain> pd1 =

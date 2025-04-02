@@ -1,3 +1,4 @@
+#include <cuda_runtime.h>
 #include <sys/types.h>
 
 #include <atomic>
@@ -6,11 +7,7 @@
 #include <thread>
 #include <vector>
 
-#include "gpu_mem_util.h"
 #include "rdma_util.h"
-
-constexpr uint32_t kGPU1 = 2;
-constexpr uint32_t kGPU2 = 7;
 
 constexpr uint64_t kChunkSize = 64ull * 1024 * 1024;
 constexpr uint64_t kSlotNum = 64;
@@ -18,23 +15,63 @@ constexpr uint64_t kBufferSize = 2 * kChunkSize * kSlotNum;
 constexpr uint64_t kSendRecvCount = 128ull * 1024 * 1024 * 1024 / kChunkSize;
 constexpr uint64_t kThreadNum = 1;
 
-constexpr const char* kRNIC1 = "mlx5_1";
-constexpr const char* kRNIC2 = "mlx5_5";
-
 static std::atomic<uint64_t> g_bytes_transferred(0);
 
 int reporter_thread();
 int recver_thread(std::shared_ptr<rdma_util::RcQueuePair> qp, std::shared_ptr<rdma_util::MemoryRegion> mr);
 int sender_thread(std::shared_ptr<rdma_util::RcQueuePair> qp, std::shared_ptr<rdma_util::MemoryRegion> mr);
 
-int main() {
-    auto send_buffer = gpu_mem_util::malloc_gpu_buffer(kBufferSize, kGPU1);
-    auto recv_buffer = gpu_mem_util::malloc_gpu_buffer(kBufferSize, kGPU2);
+struct Buffer {
+    void* ptr;
+    size_t size;
+    std::function<void(void*)> deleter;
 
-    if (send_buffer == nullptr || recv_buffer == nullptr) {
+    void* get_ptr() {
+        return ptr;
+    }
+
+    Buffer(void* p, size_t s, std::function<void(void*)> d) : ptr(p), size(s), deleter(d) {}
+
+    ~Buffer() {
+        deleter(ptr);
+    }
+};
+
+int main() {
+    constexpr const char* kRNIC1 = "mlx5_1";
+    constexpr const char* kRNIC2 = "mlx5_2";
+
+    // auto send_buffer = Buffer(
+    //     []() {
+    //         cudaSetDevice(0);
+    //         void* p = nullptr;
+    //         cudaMalloc(&p, kBufferSize);
+    //         return p;
+    //     }(),
+    //     kBufferSize,
+    //     [](void* p) { cudaFree(p); }
+    // );
+    // auto recv_buffer = Buffer(
+    //     []() {
+    //         cudaSetDevice(2);
+    //         void* p = nullptr;
+    //         cudaMalloc(&p, kBufferSize);
+    //         return p;
+    //     }(),
+    //     kBufferSize,
+    //     [](void* p) { cudaFree(p); }
+    // );
+
+    auto send_buffer = Buffer(malloc(kBufferSize), kBufferSize, [](void* p) { free(p); });
+    auto recv_buffer = Buffer(malloc(kBufferSize), kBufferSize, [](void* p) { free(p); });
+
+    if (send_buffer.get_ptr() == nullptr || recv_buffer.get_ptr() == nullptr) {
         printf("Failed to allocate buffer\n");
         return 1;
     }
+
+    void* send_buffer_ptr = send_buffer.get_ptr();
+    void* recv_buffer_ptr = recv_buffer.get_ptr();
 
     {
         std::vector<std::thread> threads;
@@ -43,11 +80,13 @@ int main() {
 
         std::shared_ptr<rdma_util::ProtectionDomain> pd1 =
             rdma_util::ProtectionDomain::create(rdma_util::Context::create(kRNIC1));
-        std::shared_ptr<rdma_util::MemoryRegion> mr1 = rdma_util::MemoryRegion::create(pd1, send_buffer, kBufferSize);
+        std::shared_ptr<rdma_util::MemoryRegion> mr1 =
+            rdma_util::MemoryRegion::create(pd1, send_buffer_ptr, kBufferSize);
 
         std::shared_ptr<rdma_util::ProtectionDomain> pd2 =
             rdma_util::ProtectionDomain::create(rdma_util::Context::create(kRNIC2));
-        std::shared_ptr<rdma_util::MemoryRegion> mr2 = rdma_util::MemoryRegion::create(pd2, recv_buffer, kBufferSize);
+        std::shared_ptr<rdma_util::MemoryRegion> mr2 =
+            rdma_util::MemoryRegion::create(pd2, recv_buffer_ptr, kBufferSize);
 
         printf("mr1: %p\n", mr1->get_addr());
         printf("mr2: %p\n", mr2->get_addr());
@@ -56,8 +95,8 @@ int main() {
             std::shared_ptr<rdma_util::RcQueuePair> qp1 = rdma_util::RcQueuePair::create(pd1);
             std::shared_ptr<rdma_util::RcQueuePair> qp2 = rdma_util::RcQueuePair::create(pd2);
 
-            qp1->bring_up(qp2->get_handshake_data());
-            qp2->bring_up(qp1->get_handshake_data());
+            qp1->bring_up(qp2->get_handshake_data(3), 3);
+            qp2->bring_up(qp1->get_handshake_data(3), 3);
 
             qp_list_1.push_back(qp1);
             qp_list_2.push_back(qp2);
@@ -74,9 +113,6 @@ int main() {
             thread.join();
         }
     }
-
-    gpu_mem_util::free_gpu_buffer(send_buffer, 0);
-    gpu_mem_util::free_gpu_buffer(recv_buffer, 7);
 
     return 0;
 }

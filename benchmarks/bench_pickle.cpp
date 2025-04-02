@@ -12,10 +12,10 @@
 #include "pickle.h"
 #include "pickle_logger.h"
 
-constexpr const char* kRNIC1 = "mlx5_1";
-constexpr const char* kRNIC2 = "mlx5_2";
-constexpr const uint32_t kGPU1 = 0;
-constexpr const uint32_t kGPU2 = 2;
+constexpr const char* kRNIC1 = "mlx5_3";
+constexpr const char* kRNIC2 = "mlx5_4";
+constexpr const uint32_t kGPU1 = 4;
+constexpr const uint32_t kGPU2 = 6;
 
 constexpr const uint64_t kDataBufferSize = 1ull * 75 * 1024 * 1024 * 1024;
 constexpr const uint32_t kChunkSize = 1ull * 1024 * 1024;

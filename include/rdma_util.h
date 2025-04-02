@@ -269,26 +269,6 @@ public:
      */
     int poll_recv_cq_once(const int max_num_wcs, std::vector<WorkCompletion>& polled_wcs) noexcept;
 
-    /**
-     * UNSAFE: This function panics if the size of `wc_buffer` is less than the sizeof `ibv_wc[max_num_wcs]`
-     * @brief poll the send_cq once and return the number of polled work completions on success
-     * 
-     * @param max_num_wcs maximum number of work completions to poll
-     * @param wc_buffer work completion buffer. You must ensure that the buffer is larger than the sizeof `ibv_wc[max_num_wcs]`
-     * @param polled_wcs return value to store the polled wr_ids and status
-     */
-    int poll_send_cq_once(const int max_num_wcs, ibv_wc* wc_buffer, std::vector<WorkCompletion>& polled_wcs);
-
-    /**
-     * UNSAFE: This function panics if the size of `wc_buffer` is less than the sizeof `ibv_wc[max_num_wcs]`
-     * @brief poll the recv_cq once and return the number of polled work completions on success
-     * 
-     * @param max_num_wcs maximum number of work completions to poll
-     * @param wc_buffer work completion buffer. You must ensure that the buffer is larger than the sizeof `ibv_wc[max_num_wcs]`
-     * @param polled_wcs return value to store the polled wr_ids and status
-     */
-    int poll_recv_cq_once(const int max_num_wcs, ibv_wc* wc_buffer, std::vector<WorkCompletion>& polled_wcs);
-
     int poll_send_cq_once(const int max_num_wcs, std::vector<ibv_wc>& polled_wcs);
     int poll_recv_cq_once(const int max_num_wcs, std::vector<ibv_wc>& polled_wcs);
 };
