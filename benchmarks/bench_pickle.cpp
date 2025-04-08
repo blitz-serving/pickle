@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "gpu_mem_util.h"
+#include "cuda_util.h"
 #include "pickle.h"
 #include "pickle_logger.h"
 
@@ -92,16 +92,16 @@ int main() {
     std::shared_ptr<rdma_util::MemoryRegion> data_mr1 = rdma_util::MemoryRegion::create(
         qp1->get_pd(),
         std::shared_ptr<void>(
-            gpu_mem_util::malloc_gpu_buffer(kDataBufferSize, kGPU1),
-            [](void* p) { gpu_mem_util::free_gpu_buffer(p, kGPU1); }
+            cuda_util::malloc_gpu_buffer(kDataBufferSize, kGPU1),
+            [](void* p) { cuda_util::free_gpu_buffer(p); }
         ),
         kDataBufferSize
     );
     std::shared_ptr<rdma_util::MemoryRegion> data_mr2 = rdma_util::MemoryRegion::create(
         qp2->get_pd(),
         std::shared_ptr<void>(
-            gpu_mem_util::malloc_gpu_buffer(kDataBufferSize, kGPU2),
-            [](void* p) { gpu_mem_util::free_gpu_buffer(p, kGPU2); }
+            cuda_util::malloc_gpu_buffer(kDataBufferSize, kGPU2),
+            [](void* p) { cuda_util::free_gpu_buffer(p); }
         ),
         kDataBufferSize
     );

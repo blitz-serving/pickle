@@ -6,7 +6,7 @@
 #include <thread>
 #include <vector>
 
-#include "gpu_mem_util.h"
+#include "cuda_util.h"
 #include "rdma_util.h"
 
 constexpr uint64_t kChunkSize = 64ull * 1024 * 1024;
@@ -26,8 +26,8 @@ int recver_thread(std::shared_ptr<rdma_util::RcQueuePair> qp, std::shared_ptr<rd
 int sender_thread(std::shared_ptr<rdma_util::RcQueuePair> qp, std::shared_ptr<rdma_util::MemoryRegion> mr);
 
 int main() {
-    auto send_buffer = gpu_mem_util::malloc_gpu_buffer(kBufferSize, kGPU1);
-    auto recv_buffer = gpu_mem_util::malloc_gpu_buffer(kBufferSize, kGPU2);
+    auto send_buffer = cuda_util::malloc_gpu_buffer(kBufferSize, kGPU1);
+    auto recv_buffer = cuda_util::malloc_gpu_buffer(kBufferSize, kGPU2);
 
     if (send_buffer == nullptr || recv_buffer == nullptr) {
         printf("Failed to allocate buffer\n");
@@ -65,8 +65,8 @@ int main() {
         t2.join();
     }
 
-    gpu_mem_util::free_gpu_buffer(send_buffer, kGPU1);
-    gpu_mem_util::free_gpu_buffer(recv_buffer, kGPU2);
+    cuda_util::free_gpu_buffer(send_buffer);
+    cuda_util::free_gpu_buffer(recv_buffer);
 
     return 0;
 }

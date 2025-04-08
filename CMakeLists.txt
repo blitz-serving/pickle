@@ -39,16 +39,8 @@ target_include_directories(pickle PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 
-add_library(gpu_mem_util "src/gpu_mem_util.cpp")
 enable_language(CUDA)
 find_package(CUDAToolkit)
-target_link_libraries(gpu_mem_util PUBLIC CUDA::cudart)
-target_link_libraries(gpu_mem_util PUBLIC ${CUDA_LIBRARIES})
-target_include_directories(gpu_mem_util PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:include>
-    ${CUDA_INCLUDE_DIRS}
-)
 
 # Add test executables
 if(BUILD_TESTS)
@@ -57,7 +49,7 @@ if(BUILD_TESTS)
     foreach(TEST_SOURCE ${TEST_SOURCES})
         get_filename_component(TEST_NAME ${TEST_SOURCE} NAME_WE)
         add_executable(${TEST_NAME} ${TEST_SOURCE})
-        target_link_libraries(${TEST_NAME} gtest_main rdma_util pickle gpu_mem_util)
+        target_link_libraries(${TEST_NAME} gtest_main rdma_util pickle CUDA::cudart)
         add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
     endforeach()
 endif()
@@ -69,7 +61,7 @@ if(BUILD_EXAMPLES)
     foreach(EXAMPLE_SOURCE ${EXAMPLE_SOURCES})
         get_filename_component(EXAMPLE_NAME ${EXAMPLE_SOURCE} NAME_WE)
         add_executable(${EXAMPLE_NAME} ${EXAMPLE_SOURCE})
-        target_link_libraries(${EXAMPLE_NAME} rdma_util pickle gpu_mem_util)
+        target_link_libraries(${EXAMPLE_NAME} rdma_util pickle CUDA::cudart)
     endforeach()
 endif()
 
@@ -80,7 +72,7 @@ if(BUILD_BENCHMARKS)
     foreach(BENCHMARK_SOURCE ${BENCHMARK_SOURCES})
         get_filename_component(BENCHMARK_NAME ${BENCHMARK_SOURCE} NAME_WE)
         add_executable(${BENCHMARK_NAME} ${BENCHMARK_SOURCE})
-        target_link_libraries(${BENCHMARK_NAME} rdma_util pickle gpu_mem_util pthread)
+        target_link_libraries(${BENCHMARK_NAME} rdma_util pickle pthread CUDA::cudart)
     endforeach()
 endif()
 

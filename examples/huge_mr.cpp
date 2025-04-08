@@ -2,7 +2,7 @@
 #include <cstdio>
 #include <utility>
 
-#include "gpu_mem_util.h"
+#include "cuda_util.h"
 #include "rdma_util.h"
 
 constexpr uint32_t kGPU = 7;
@@ -12,14 +12,13 @@ constexpr const char* kRNIC = "mlx5_5";
 constexpr uint64_t kSize = 75ull * 1024 * 1024 * 1024;
 
 int main() {
-    void* d_ptr = gpu_mem_util::malloc_gpu_buffer(kSize, kGPU);
+    void* d_ptr = cuda_util::malloc_gpu_buffer(kSize, kGPU);
 
     {
         auto pd = rdma_util::ProtectionDomain::create(rdma_util::Context::create(kRNIC));
         auto mr = rdma_util::MemoryRegion::create(std::move(pd), d_ptr, kSize);
     }
 
-    gpu_mem_util::free_gpu_buffer(d_ptr, kGPU);
-
+    cuda_util::free_gpu_buffer(d_ptr);
     return 0;
 }
