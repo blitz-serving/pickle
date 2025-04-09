@@ -7,12 +7,12 @@
 
 class PollingThreads {
 public:
-    void add_thread(std::thread t, std::function<void()> stop_function) {
-        background_threads_.emplace_back(std::move(t));
+    void add_thread(std::thread polling_thread, std::function<void()> stop_function) {
+        background_threads_.emplace_back(std::move(polling_thread));
         stop_functions_.emplace_back(std::move(stop_function));
     }
 
-    explicit PollingThreads() {
+    PollingThreads() {
         std::cout << "PollingThreads::PollingThreads()" << std::endl;
     };
 
@@ -48,15 +48,15 @@ PollingThreads gPollingThreads;
 
 int main() {
     auto flag = std::make_shared<std::atomic<bool>>(false);
-    auto t = std::thread([flag]() {
-        while (!flag->load()) {
-            std::cout << "Polling..." << std::endl;
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-        }
-    });
-    gPollingThreads.add_thread(std::move(t), [flag]() { flag->store(true); });
-
+    gPollingThreads.add_thread(
+        std::thread([flag]() {
+            while (!flag->load()) {
+                std::cout << "Polling..." << std::endl;
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
+        }),
+        [flag]() { flag->store(true); }
+    );
     std::this_thread::sleep_for(std::chrono::seconds(5));
-
     return 0;
 }

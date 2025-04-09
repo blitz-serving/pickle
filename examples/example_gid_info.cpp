@@ -10,8 +10,8 @@ int main() {
         const char* dev_name = ibv_get_device_name(dev_list[i]);
         cout << "Device " << i << ": " << dev_name << endl;
         ibv_context* context = ibv_open_device(dev_list[i]);
-        ibv_gid_entry entries[4];
-        int num_entries = _ibv_query_gid_table(context, entries, 4, 0, sizeof(entries[0]));
+        ibv_gid_entry entries[16];
+        int num_entries = _ibv_query_gid_table(context, entries, 16, 0, sizeof(entries[0]));
         for (int j = 0; j < num_entries; j++) {
             cout << "gid index: " << entries[j].gid_index << " gid type: " << entries[j].gid_type << " gid: ";
             for (int k = 0; k < 16; k++) {
