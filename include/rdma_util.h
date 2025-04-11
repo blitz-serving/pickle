@@ -345,6 +345,10 @@ public:
     inline uint64_t get_length() const {
         return this->inner->length;
     }
+
+    inline std::shared_ptr<ProtectionDomain> get_pd() const {
+        return this->pd_;
+    }
 };
 
 template<typename T>
