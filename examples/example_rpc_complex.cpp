@@ -38,7 +38,7 @@ struct rpc_data_t {
 
     rpc_data_t() = default;
 
-    std::vector<char> to_bytes() const {
+    std::vector<char> into_bytes() const {
         std::vector<char> buffer(sizeof(rpc_data_t));
         std::memcpy(buffer.data(), this, sizeof(rpc_data_t));
         return buffer;
@@ -93,17 +93,17 @@ public:
                     std::lock_guard<std::mutex> lock(this->qp_mutex_);
                     if (this->qp_ != nullptr) {
                         ERROR("Queue pair already exists");
-                        return rpc_data_t {rpc_type_t::RPC_TYPE_ERROR, {}}.to_bytes();
+                        return rpc_data_t {rpc_type_t::RPC_TYPE_ERROR, {}}.into_bytes();
                     }
                     this->qp_ = std::move(qp);
                 }
-                return rpc_data_t {rpc_type_t::RPC_TYPE_HANDSHAKE, {.handshake_data = handshake_data}}.to_bytes();
+                return rpc_data_t {rpc_type_t::RPC_TYPE_HANDSHAKE, {.handshake_data = handshake_data}}.into_bytes();
             } else if (request.type == rpc_type_t::RPC_TYPE_SEND_RECV) {
                 INFO("Handling send/recv request");
                 auto size = request.data.send_recv_size;
                 if (size > this->mr_->get_length()) {
                     ERROR("Requested size exceeds buffer size");
-                    return rpc_data_t {rpc_type_t::RPC_TYPE_ERROR, {}}.to_bytes();
+                    return rpc_data_t {rpc_type_t::RPC_TYPE_ERROR, {}}.into_bytes();
                 }
                 std::shared_ptr<pickle::PickleRecver> recver {nullptr};
                 {
@@ -118,14 +118,14 @@ public:
                         std::this_thread::yield();
                     }
                 }).detach();
-                return rpc_data_t {rpc_type_t::RPC_TYPE_SUCCESS, {.send_recv_size = size}}.to_bytes();
+                return rpc_data_t {rpc_type_t::RPC_TYPE_SUCCESS, {.send_recv_size = size}}.into_bytes();
             } else {
                 ERROR("Unknown RPC request type");
-                return rpc_data_t {rpc_type_t::RPC_TYPE_ERROR, {}}.to_bytes();
+                return rpc_data_t {rpc_type_t::RPC_TYPE_ERROR, {}}.into_bytes();
             }
         } catch (const std::exception& e) {
             ERROR("Error handling RPC request: {}", e.what());
-            return rpc_data_t {rpc_type_t::RPC_TYPE_ERROR, {}}.to_bytes();
+            return rpc_data_t {rpc_type_t::RPC_TYPE_ERROR, {}}.into_bytes();
         }
     }
 
@@ -154,7 +154,7 @@ void client(const char* ip, int port) {
     auto response = rpc_data_t::from_bytes(rpc_core::rpc_call(
         ip,
         port,
-        rpc_data_t {rpc_type_t::RPC_TYPE_HANDSHAKE, {.handshake_data = qp->get_handshake_data(3)}}.to_bytes()
+        rpc_data_t {rpc_type_t::RPC_TYPE_HANDSHAKE, {.handshake_data = qp->get_handshake_data(3)}}.into_bytes()
     ));
     assert(response.type == rpc_type_t::RPC_TYPE_HANDSHAKE);
 
@@ -167,7 +167,7 @@ void client(const char* ip, int port) {
     response = rpc_data_t::from_bytes(rpc_core::rpc_call(
         "127.0.0.1",
         port,
-        rpc_data_t {rpc_type_t::RPC_TYPE_SEND_RECV, {.send_recv_size = kDataBufferSize}}.to_bytes()
+        rpc_data_t {rpc_type_t::RPC_TYPE_SEND_RECV, {.send_recv_size = kDataBufferSize}}.into_bytes()
     ));
     assert(response.type == rpc_type_t::RPC_TYPE_SUCCESS);
     while (!handle.is_finished()) {

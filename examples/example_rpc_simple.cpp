@@ -8,7 +8,7 @@ struct rpc_request_t {
 
     rpc_request_t() = default;
 
-    std::vector<char> to_bytes() const {
+    std::vector<char> into_bytes() const {
         std::vector<char> data(sizeof(rpc_request_t));
         std::memcpy(data.data(), this, sizeof(rpc_request_t));
         return data;
@@ -56,7 +56,8 @@ int main() {
     rpc.start();
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    auto response = rpc_response_t::from_bytes(rpc_core::rpc_call("127.0.0.1", 8080, rpc_request_t {1, 2}.to_bytes()));
+    auto response =
+        rpc_response_t::from_bytes(rpc_core::rpc_call("127.0.0.1", 8080, rpc_request_t {1, 2}.into_bytes()));
     INFO("Received response: result={}", response.result);
 
     std::this_thread::sleep_for(std::chrono::seconds(1));
