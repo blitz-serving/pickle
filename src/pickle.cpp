@@ -373,8 +373,8 @@ Flusher::Flusher(shared_ptr<ProtectionDomain>& pd) noexcept(false) : pending_flu
         MemoryRegion::create(pd, shared_ptr<void>(new Cacheline, [](Cacheline* p) { delete p; }), sizeof(Cacheline));
 }
 
-shared_ptr<Flusher> Flusher::create(shared_ptr<ProtectionDomain> pd) noexcept(false) {
-    return shared_ptr<Flusher>(new Flusher(pd));
+unique_ptr<Flusher> Flusher::create(shared_ptr<ProtectionDomain> pd) noexcept(false) {
+    return unique_ptr<Flusher>(new Flusher(pd));
 }
 
 void Flusher::append(uint32_t rkey, uint64_t raddr, shared_ptr<atomic<bool>> flag) {

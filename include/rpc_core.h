@@ -31,10 +31,9 @@ inline std::vector<char> recv_data(int fd) noexcept(false) {
 
     while (total_received < sizeof(size_t)) {
         ssize_t bytes = recv(fd, size_buffer + total_received, sizeof(size_t) - total_received, 0);
-        DEBUG("Receive data: {} bytes", bytes);
         if (bytes < 0) {
-            ERROR("Receive size failed");
-            throw std::runtime_error("Receive size failed");
+            ERROR("Receive header filed. Mismatched protocol?");
+            return {};
         }
         total_received += bytes;
     }
@@ -43,10 +42,9 @@ inline std::vector<char> recv_data(int fd) noexcept(false) {
     total_received = 0;
     while (total_received < data_size) {
         ssize_t bytes = recv(fd, data.data() + total_received, data_size - total_received, 0);
-        DEBUG("Receive data: {} bytes", bytes);
         if (bytes <= 0) {
-            ERROR("Receive data failed");
-            throw std::runtime_error("Receive data failed");
+            ERROR("Receive data failed. Mismatched data size?");
+            return {};
         }
         total_received += bytes;
     }
@@ -60,10 +58,9 @@ inline void send_data(int fd, std::vector<char>&& data) noexcept(false) {
 
     while (total_sent < sizeof(size_t)) {
         ssize_t bytes = send(fd, size_buffer + total_sent, sizeof(size_t) - total_sent, 0);
-        DEBUG("Send size: {} bytes", bytes);
         if (bytes <= 0) {
-            ERROR("Send size failed");
-            throw std::runtime_error("Send size failed");
+            ERROR("Send header failed");
+            return;
         }
         total_sent += bytes;
     }
@@ -71,10 +68,9 @@ inline void send_data(int fd, std::vector<char>&& data) noexcept(false) {
     total_sent = 0;
     while (total_sent < data_size) {
         ssize_t bytes = send(fd, data.data() + total_sent, data_size - total_sent, 0);
-        DEBUG("Send data: {} bytes", bytes);
         if (bytes <= 0) {
             ERROR("Send data failed");
-            throw std::runtime_error("Send data failed");
+            return;
         }
         total_sent += bytes;
     }
@@ -116,20 +112,22 @@ private:
     std::thread server_thread;
 
     inline void accept_connections() noexcept(false) {
+        static uint64_t next_tid = 0;
         while (stop_flag.load(std::memory_order_relaxed) == false) {
             sockaddr_in client_addr {};
             socklen_t len = sizeof(client_addr);
             // server_fd is non-blocking, so we can use accept() without blocking
             int client_fd = accept(server_fd, (sockaddr*)&client_addr, &len);
             if (client_fd >= 0) {
-                std::thread([client_fd, rpc_handle = this->rpc_handle]() {
+                uint64_t tid = next_tid++;
+                std::thread([tid, client_fd, rpc_handle = this->rpc_handle]() {
                     try {
-                        DEBUG("Client fd: {}", client_fd);
                         send_data(client_fd, rpc_handle->handle(recv_data(client_fd)));
                     } catch (const std::exception& e) {
                         ERROR("Error handling client: {}", e.what());
                     }
                     close(client_fd);
+                    DEBUG("Handler Thread [{}] exited", tid);
                 }).detach();
             } else if (errno == EWOULDBLOCK || errno == EAGAIN) {
                 // No incoming connections, continue to check
@@ -188,7 +186,7 @@ public:
             try {
                 accept_connections();
             } catch (const std::exception& e) {
-                ERROR("Error in server thread: {}", e.what());
+                ERROR("Error occured in server thread: {}", e.what());
             }
         });
 
@@ -204,7 +202,7 @@ public:
             close(server_fd);
             server_fd = -1;
         }
-        DEBUG("Server stopped");
+        DEBUG("RpcServer stopped");
     }
 
     ~RpcServer() {

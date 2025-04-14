@@ -149,10 +149,14 @@ private:
 public:
     ~Flusher() = default;
 
-    static std::shared_ptr<Flusher> create(std::shared_ptr<ProtectionDomain> pd) noexcept(false);
+    static std::unique_ptr<Flusher> create(std::shared_ptr<ProtectionDomain> pd) noexcept(false);
 
     void append(uint32_t rkey, uint64_t raddr, std::shared_ptr<std::atomic<bool>> flag);
 
+    /**
+     * @brief The executor of the Flusher.
+     * SAFETY: !! This function is not thread-safe !!
+     */
     void poll() noexcept(false);
 };
 
