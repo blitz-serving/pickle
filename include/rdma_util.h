@@ -269,8 +269,10 @@ public:
      */
     int poll_recv_cq_once(const int max_num_wcs, std::vector<WorkCompletion>& polled_wcs) noexcept;
 
-    int poll_send_cq_once(const int max_num_wcs, std::vector<ibv_wc>& polled_wcs);
-    int poll_recv_cq_once(const int max_num_wcs, std::vector<ibv_wc>& polled_wcs);
+    int wait_until_send_completion(const int expected_num_wcs, std::vector<ibv_wc>& polled_wcs) noexcept;
+    int wait_until_recv_completion(const int expected_num_wcs, std::vector<ibv_wc>& polled_wcs) noexcept;
+    int poll_send_cq_once(const int max_num_wcs, std::vector<ibv_wc>& polled_wcs) noexcept;
+    int poll_recv_cq_once(const int max_num_wcs, std::vector<ibv_wc>& polled_wcs) noexcept;
 };
 
 class MemoryRegion {

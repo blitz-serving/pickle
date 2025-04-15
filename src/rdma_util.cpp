@@ -451,68 +451,38 @@ int RcQueuePair::wait_until_send_completion(
     const int expected_num_wcs,
     std::vector<WorkCompletion>& polled_wcs
 ) noexcept {
-    ibv_wc* work_completions = new ibv_wc[expected_num_wcs];
-    int ret = 0;
-    int num_polled_completions = 0;
-
-    if (polled_wcs.size() > 0) {
-        polled_wcs.clear();
+    std::vector<ibv_wc> raw_polled_wcs;
+    int ret = this->wait_until_send_completion(expected_num_wcs, raw_polled_wcs);
+    polled_wcs.resize(raw_polled_wcs.size());
+    for (size_t i = 0; i < raw_polled_wcs.size(); ++i) {
+        WorkCompletion work_completion {};
+        work_completion.wr_id = raw_polled_wcs[i].wr_id;
+        work_completion.status = raw_polled_wcs[i].status;
+        work_completion.byte_len = raw_polled_wcs[i].byte_len;
+        work_completion.opcode = raw_polled_wcs[i].opcode;
+        work_completion.imm_data = ntohl(raw_polled_wcs[i].imm_data);
+        polled_wcs.push_back(work_completion);
     }
-
-    while (num_polled_completions < expected_num_wcs) {
-        ret = ibv_poll_cq(this->inner->send_cq, expected_num_wcs, work_completions);
-        if (ret > 0) {
-            for (int i = 0; i < ret; ++i) {
-                WorkCompletion work_completion {};
-                work_completion.wr_id = work_completions[i].wr_id;
-                work_completion.status = work_completions[i].status;
-                work_completion.byte_len = work_completions[i].byte_len;
-                work_completion.opcode = work_completions[i].opcode;
-                work_completion.imm_data = ntohl(work_completions[i].imm_data);
-                polled_wcs.push_back(work_completion);
-            }
-            num_polled_completions += ret;
-        } else if (ret < 0) {
-            delete[] work_completions;
-            return ret;
-        }
-    }
-    delete[] work_completions;
-    return 0;
+    return ret;
 }
 
 int RcQueuePair::wait_until_recv_completion(
     const int expected_num_wcs,
     std::vector<WorkCompletion>& polled_wcs
 ) noexcept {
-    ibv_wc* work_completions = new ibv_wc[expected_num_wcs];
-    int ret = 0;
-    int num_polled_completions = 0;
-
-    if (polled_wcs.size() > 0) {
-        polled_wcs.clear();
+    std::vector<ibv_wc> raw_polled_wcs;
+    int ret = this->wait_until_recv_completion(expected_num_wcs, raw_polled_wcs);
+    polled_wcs.resize(raw_polled_wcs.size());
+    for (size_t i = 0; i < raw_polled_wcs.size(); ++i) {
+        WorkCompletion work_completion {};
+        work_completion.wr_id = raw_polled_wcs[i].wr_id;
+        work_completion.status = raw_polled_wcs[i].status;
+        work_completion.byte_len = raw_polled_wcs[i].byte_len;
+        work_completion.opcode = raw_polled_wcs[i].opcode;
+        work_completion.imm_data = ntohl(raw_polled_wcs[i].imm_data);
+        polled_wcs.push_back(work_completion);
     }
-
-    while (num_polled_completions < expected_num_wcs) {
-        ret = ibv_poll_cq(this->inner->recv_cq, expected_num_wcs, work_completions);
-        if (ret > 0) {
-            for (int i = 0; i < ret; ++i) {
-                WorkCompletion work_completion {};
-                work_completion.wr_id = work_completions[i].wr_id;
-                work_completion.status = work_completions[i].status;
-                work_completion.byte_len = work_completions[i].byte_len;
-                work_completion.opcode = work_completions[i].opcode;
-                work_completion.imm_data = ntohl(work_completions[i].imm_data);
-                polled_wcs.push_back(work_completion);
-            }
-            num_polled_completions += ret;
-        } else if (ret < 0) {
-            delete[] work_completions;
-            return ret;
-        }
-    }
-    delete[] work_completions;
-    return 0;
+    return ret;
 }
 
 int RcQueuePair::poll_send_cq_once(const int max_num_wcs, std::vector<WorkCompletion>& polled_wcs) noexcept {
@@ -565,7 +535,57 @@ int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, std::vector<WorkComple
     return ret;
 }
 
-int RcQueuePair::poll_send_cq_once(const int max_num_wcs, std::vector<ibv_wc>& polled_wcs) {
+int RcQueuePair::wait_until_send_completion(const int expected_num_wcs, std::vector<ibv_wc>& polled_wcs) noexcept {
+    polled_wcs.resize(expected_num_wcs);
+    int ret = 0;
+    int num_polled_completions = 0;
+
+    if (polled_wcs.size() > 0) {
+        polled_wcs.clear();
+    }
+
+    while (num_polled_completions < expected_num_wcs) {
+        ret = ibv_poll_cq(
+            this->inner->send_cq,
+            expected_num_wcs - num_polled_completions,
+            polled_wcs.data() + num_polled_completions
+        );
+        if (ret > 0) {
+            num_polled_completions += ret;
+        } else if (ret < 0) {
+            polled_wcs.reserve(num_polled_completions);
+            return ret;
+        }
+    }
+    return 0;
+}
+
+int RcQueuePair::wait_until_recv_completion(const int expected_num_wcs, std::vector<ibv_wc>& polled_wcs) noexcept {
+    polled_wcs.resize(expected_num_wcs);
+    int ret = 0;
+    int num_polled_completions = 0;
+
+    if (polled_wcs.size() > 0) {
+        polled_wcs.clear();
+    }
+
+    while (num_polled_completions < expected_num_wcs) {
+        ret = ibv_poll_cq(
+            this->inner->recv_cq,
+            expected_num_wcs - num_polled_completions,
+            polled_wcs.data() + num_polled_completions
+        );
+        if (ret > 0) {
+            num_polled_completions += ret;
+        } else if (ret < 0) {
+            polled_wcs.reserve(num_polled_completions);
+            return ret;
+        }
+    }
+    return 0;
+}
+
+int RcQueuePair::poll_send_cq_once(const int max_num_wcs, std::vector<ibv_wc>& polled_wcs) noexcept {
     polled_wcs.resize(max_num_wcs);
     int ret = ibv_poll_cq(this->inner->send_cq, max_num_wcs, polled_wcs.data());
     if (ret < 0) {
@@ -576,7 +596,7 @@ int RcQueuePair::poll_send_cq_once(const int max_num_wcs, std::vector<ibv_wc>& p
     return ret;
 }
 
-int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, std::vector<ibv_wc>& polled_wcs) {
+int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, std::vector<ibv_wc>& polled_wcs) noexcept {
     polled_wcs.resize(max_num_wcs);
     int ret = ibv_poll_cq(this->inner->recv_cq, max_num_wcs, polled_wcs.data());
     if (ret < 0) {
