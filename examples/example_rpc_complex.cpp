@@ -81,6 +81,14 @@ public:
         });
     }
 
+    ~rpc_handle_t() override {
+        stop_flag_->store(true, std::memory_order_relaxed);
+        if (flusher_thread_.joinable()) {
+            flusher_thread_.join();
+        }
+        INFO("rpc_handle_t stopped");
+    }
+
     std::vector<char> handle(std::vector<char>&& data) const override {
         try {
             auto request = rpc_data_t::from_bytes(data);
@@ -127,14 +135,6 @@ public:
             ERROR("Error handling RPC request: {}", e.what());
             return rpc_data_t {rpc_type_t::RPC_TYPE_ERROR, {}}.into_bytes();
         }
-    }
-
-    ~rpc_handle_t() override {
-        stop_flag_->store(true, std::memory_order_relaxed);
-        if (flusher_thread_.joinable()) {
-            flusher_thread_.join();
-        }
-        INFO("rpc_handle_t stopped");
     }
 };
 
@@ -185,7 +185,7 @@ int main() {
         kDataBufferSize
     );
     auto flusher = pickle::Flusher::create(mr->get_pd());
-    auto rpc_handle = std::make_shared<rpc_handle_t>(std::move(mr), std::move(flusher));
+    auto rpc_handle = std::make_shared<const rpc_handle_t>(std::move(mr), std::move(flusher));
     auto server = rpc_core::RpcServer("0.0.0.0", 12345, rpc_handle);
     server.start();
     client("127.0.0.1", 12345);

@@ -107,7 +107,7 @@ private:
     std::string ip;
     int port;
     std::atomic_bool stop_flag;
-    std::shared_ptr<RpcHandle> rpc_handle;
+    std::shared_ptr<const RpcHandle> rpc_handle;
 
     std::thread server_thread;
 
@@ -140,7 +140,7 @@ private:
     }
 
 public:
-    RpcServer(const std::string& ip, int port, std::shared_ptr<RpcHandle> handle) :
+    RpcServer(const std::string& ip, int port, std::shared_ptr<const RpcHandle> handle) :
         server_fd(-1),
         ip(ip),
         port(port),
