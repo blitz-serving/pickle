@@ -14,6 +14,7 @@ option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 # Add third-party libraries
 if(NOT TARGET fmt)
     add_subdirectory(third_party/fmt)
+    link_libraries(fmt-header-only)
 endif()
 
 if(NOT TARGET concurrentqueue)

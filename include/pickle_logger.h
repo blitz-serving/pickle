@@ -1,8 +1,6 @@
 #ifndef _LOGGER_H_
 #define _LOGGER_H_
 
-#define FMT_HEADER_ONLY
-
 #include <fmt/chrono.h>
 #include <fmt/core.h>
 
