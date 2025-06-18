@@ -9,7 +9,7 @@
 
 #include "rdma_util.h"
 
-constexpr uint64_t kChunkSize = 64ull * 1024 * 1024;
+constexpr uint64_t kChunkSize = 512;
 constexpr uint64_t kSlotNum = 64;
 constexpr uint64_t kBufferSize = 2 * kChunkSize * kSlotNum;
 constexpr uint64_t kSendRecvCount = 128ull * 1024 * 1024 * 1024 / kChunkSize;
@@ -21,57 +21,48 @@ int reporter_thread();
 int recver_thread(std::shared_ptr<rdma_util::RcQueuePair> qp, std::shared_ptr<rdma_util::MemoryRegion> mr);
 int sender_thread(std::shared_ptr<rdma_util::RcQueuePair> qp, std::shared_ptr<rdma_util::MemoryRegion> mr);
 
-struct Buffer {
-    void* ptr;
-    size_t size;
-    std::function<void(void*)> deleter;
+#define CUDA_CHECK(expr)                                                                               \
+    do {                                                                                               \
+        cudaError_t err = expr;                                                                        \
+        if (err != cudaSuccess) {                                                                      \
+            fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
+            exit(1);                                                                                   \
+        }                                                                                              \
+    } while (0)
 
-    void* get_ptr() {
-        return ptr;
-    }
+#define ASSERT(expr)                                                                       \
+    do {                                                                                   \
+        if (!(expr)) {                                                                     \
+            fprintf(stderr, "Assertion failed at %s:%d: %s\n", __FILE__, __LINE__, #expr); \
+            exit(1);                                                                       \
+        }                                                                                  \
+    } while (0)
 
-    Buffer(void* p, size_t s, std::function<void(void*)> d) : ptr(p), size(s), deleter(d) {}
+void* malloc_buffer(uint64_t size) {
+    void* p = nullptr;
+    // cudaSetDevice(2);
+    // CUDA_CHECK(cudaMalloc(&p, size));
+    p = malloc(size);
+    ASSERT(p != nullptr);
+    return p;
+}
 
-    ~Buffer() {
-        deleter(ptr);
-    }
-};
+void free_buffer(void* p) {
+    ASSERT(p != nullptr);
+    // CUDA_CHECK(cudaFree(p));
+    free(p);
+}
 
 int main() {
-    constexpr const char* kRNIC1 = "mlx5_1";
-    constexpr const char* kRNIC2 = "mlx5_2";
+    constexpr const char* kRNIC1 = "mlx5_0";
+    constexpr const char* kRNIC2 = "mlx5_1";
+    constexpr uint32_t kGidIndex = 3;
 
-    // auto send_buffer = Buffer(
-    //     []() {
-    //         cudaSetDevice(0);
-    //         void* p = nullptr;
-    //         cudaMalloc(&p, kBufferSize);
-    //         return p;
-    //     }(),
-    //     kBufferSize,
-    //     [](void* p) { cudaFree(p); }
-    // );
-    // auto recv_buffer = Buffer(
-    //     []() {
-    //         cudaSetDevice(2);
-    //         void* p = nullptr;
-    //         cudaMalloc(&p, kBufferSize);
-    //         return p;
-    //     }(),
-    //     kBufferSize,
-    //     [](void* p) { cudaFree(p); }
-    // );
+    auto send_buffer = std::shared_ptr<void>(malloc_buffer(kBufferSize), free_buffer);
+    auto recv_buffer = std::shared_ptr<void>(malloc_buffer(kBufferSize), free_buffer);
 
-    auto send_buffer = Buffer(malloc(kBufferSize), kBufferSize, [](void* p) { free(p); });
-    auto recv_buffer = Buffer(malloc(kBufferSize), kBufferSize, [](void* p) { free(p); });
-
-    if (send_buffer.get_ptr() == nullptr || recv_buffer.get_ptr() == nullptr) {
-        printf("Failed to allocate buffer\n");
-        return 1;
-    }
-
-    void* send_buffer_ptr = send_buffer.get_ptr();
-    void* recv_buffer_ptr = recv_buffer.get_ptr();
+    void* send_buffer_ptr = send_buffer.get();
+    void* recv_buffer_ptr = recv_buffer.get();
 
     {
         std::vector<std::thread> threads;
@@ -95,8 +86,8 @@ int main() {
             std::shared_ptr<rdma_util::RcQueuePair> qp1 = rdma_util::RcQueuePair::create(pd1);
             std::shared_ptr<rdma_util::RcQueuePair> qp2 = rdma_util::RcQueuePair::create(pd2);
 
-            qp1->bring_up(qp2->get_handshake_data(3), 3);
-            qp2->bring_up(qp1->get_handshake_data(3), 3);
+            qp1->bring_up(qp2->get_handshake_data(kGidIndex), kGidIndex);
+            qp2->bring_up(qp1->get_handshake_data(kGidIndex), kGidIndex);
 
             qp_list_1.push_back(qp1);
             qp_list_2.push_back(qp2);
@@ -144,7 +135,7 @@ int recver_thread(std::shared_ptr<rdma_util::RcQueuePair> qp, std::shared_ptr<rd
         recv_posted++;
     }
 
-    std::vector<rdma_util::WorkCompletion> wcs;
+    std::vector<ibv_wc> wcs;
     wcs.reserve(kSlotNum);
 
     while (recv_polled < kSendRecvCount) {
@@ -176,7 +167,7 @@ int sender_thread(std::shared_ptr<rdma_util::RcQueuePair> qp, std::shared_ptr<rd
         send_posted++;
     }
 
-    std::vector<rdma_util::WorkCompletion> wcs;
+    std::vector<ibv_wc> wcs;
     wcs.reserve(kSlotNum);
 
     while (send_polled < kSendRecvCount) {

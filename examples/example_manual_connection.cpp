@@ -63,7 +63,7 @@ int main() {
         cout << "Send completed" << endl;
     } else {
         qp->post_recv(0, reinterpret_cast<uint64_t>(buffer), 0, mr->get_lkey());
-        std::vector<rdma_util::WorkCompletion> wcs;
+        std::vector<ibv_wc> wcs;
         wcs.reserve(1);
         while (qp->poll_recv_cq_once(1, wcs) == 0) {}
         cout << "Recv completed" << endl;

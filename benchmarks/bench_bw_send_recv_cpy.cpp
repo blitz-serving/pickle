@@ -92,7 +92,7 @@ int recver_thread(std::shared_ptr<rdma_util::RcQueuePair> qp, std::shared_ptr<rd
     const uint32_t lkey = mr->get_lkey();
 
     uint64_t i = 0;
-    std::vector<rdma_util::WorkCompletion> polled_wcs;
+    std::vector<ibv_wc> polled_wcs;
 
     while (i < kSendRecvCount) {
         i++;
@@ -110,7 +110,7 @@ int sender_thread(std::shared_ptr<rdma_util::RcQueuePair> qp, std::shared_ptr<rd
     const uint32_t lkey = mr->get_lkey();
 
     uint64_t i = 0;
-    std::vector<rdma_util::WorkCompletion> polled_wcs;
+    std::vector<ibv_wc> polled_wcs;
 
     while (i < kSendRecvCount) {
         i++;

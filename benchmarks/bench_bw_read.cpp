@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <functional>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -18,8 +18,39 @@ constexpr uint64_t kThreadNum = 1;
 
 static std::atomic<uint64_t> g_bytes_transferred(0);
 
-constexpr const char* kDevice1 = "mlx5_3";
-constexpr const char* kDevice2 = "mlx5_4";
+constexpr const char* kDevice1 = "mlx5_0";
+constexpr const char* kDevice2 = "mlx5_1";
+
+#define CUDA_CHECK(expr)                                                                               \
+    do {                                                                                               \
+        cudaError_t err = expr;                                                                        \
+        if (err != cudaSuccess) {                                                                      \
+            fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
+            exit(1);                                                                                   \
+        }                                                                                              \
+    } while (0)
+
+#define ASSERT(expr)                                                                       \
+    do {                                                                                   \
+        if (!(expr)) {                                                                     \
+            fprintf(stderr, "Assertion failed at %s:%d: %s\n", __FILE__, __LINE__, #expr); \
+            exit(1);                                                                       \
+        }                                                                                  \
+    } while (0)
+
+void* malloc_buffer(uint64_t size) {
+    void* p = nullptr;
+    // cudaSetDevice(2);
+    // CUDA_CHECK(cudaMalloc(&p, size));
+    p = malloc(size);
+    ASSERT(p != nullptr);
+    return p;
+}
+
+void free_buffer(void* p) {
+    // CUDA_CHECK(cudaFree(p));
+    free(p);
+}
 
 int reporter_thread();
 int read_thread(
@@ -28,54 +59,12 @@ int read_thread(
     std::shared_ptr<rdma_util::MemoryRegion> remote_mr
 );
 
-struct Buffer {
-    void* ptr;
-    size_t size;
-    std::function<void(void*)> deleter;
-
-    void* get_ptr() {
-        return ptr;
-    }
-
-    Buffer(void* p, size_t s, std::function<void(void*)> d) : ptr(p), size(s), deleter(d) {
-        if (ptr == nullptr) {
-            throw std::runtime_error("Buffer pointer is null");
-        }
-    }
-
-    ~Buffer() {
-        deleter(ptr);
-        printf("Buffer deleted\n");
-    }
-};
-
 int main() {
-    // auto send_buffer = Buffer(
-    //     []() {
-    //         void* p = nullptr;
-    //         cudaSetDevice(0);
-    //         cudaMalloc(&p, kBufferSize);
-    //         return p;
-    //     }(),
-    //     kBufferSize,
-    //     [](void* p) { cudaFree(p); }
-    // );
-    // auto recv_buffer = Buffer(
-    //     []() {
-    //         void* p = nullptr;
-    //         cudaSetDevice(2);
-    //         cudaMalloc(&p, kBufferSize);
-    //         return p;
-    //     }(),
-    //     kBufferSize,
-    //     [](void* p) { cudaFree(p); }
-    // );
+    auto send_buffer = std::shared_ptr<void>(malloc_buffer(kBufferSize), free_buffer);
+    auto recv_buffer = std::shared_ptr<void>(malloc_buffer(kBufferSize), free_buffer);
 
-    auto send_buffer = Buffer(malloc(kBufferSize), kBufferSize, [](void* p) { free(p); });
-    auto recv_buffer = Buffer(malloc(kBufferSize), kBufferSize, [](void* p) { free(p); });
-
-    auto send_buffer_ptr = send_buffer.get_ptr();
-    auto recv_buffer_ptr = recv_buffer.get_ptr();
+    auto send_buffer_ptr = send_buffer.get();
+    auto recv_buffer_ptr = recv_buffer.get();
 
     printf("send_buffer_addr: %p\n", send_buffer_ptr);
     printf("recv_buffer_addr: %p\n", recv_buffer_ptr);
@@ -153,7 +142,7 @@ int read_thread(
         read_posted++;
     }
 
-    std::vector<rdma_util::WorkCompletion> wcs;
+    std::vector<ibv_wc> wcs;
     wcs.reserve(kSlotNum);
 
     while (read_polled < kReadCount) {

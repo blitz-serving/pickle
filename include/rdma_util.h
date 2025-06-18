@@ -18,25 +18,6 @@ struct HandshakeData {
     uint32_t qp_num;
 };
 
-struct WorkCompletion {
-    uint64_t wr_id;
-
-    // See ibv_wc_status for detailed meaining of status
-    uint32_t status;
-
-    uint32_t byte_len;
-
-    // See ibv_wc_status for detailed meaining of status
-    uint32_t opcode;
-    uint32_t imm_data;
-
-    inline std::string to_string() const {
-        return "wr_id: " + std::to_string(wr_id) + ", status: " + std::to_string(status)
-            + ", byte_len: " + std::to_string(byte_len) + ", opcode: " + std::to_string(opcode)
-            + ", imm_data: " + std::to_string(imm_data);
-    }
-};
-
 class Context;
 class ProtectionDomain;
 class CompletionQueue;
@@ -227,7 +208,7 @@ public:
 
     int post_send_wrs(ibv_send_wr* wr_list) noexcept;
 
-    int post_recv(uint64_t wr_id, uint64_t addr, uint32_t length, uint32_t lkey) noexcept;
+    int post_recv(uint64_t wr_id, uint64_t laddr, uint32_t length, uint32_t lkey) noexcept;
 
     int post_recv_wrs(ibv_recv_wr* wr_list) noexcept;
 
@@ -236,42 +217,49 @@ public:
      * work completions are polled or an error occurs
      * 
      * @param expected_num_wcs expected number of completions
-     * @param polled_wcs return value to store the polled wr_ids and status
-     * @return int 0 on success, other values on error. Refer to
-     * https://www.rdmamojo.com/2013/02/15/ibv_poll_cq/ for more information.
+     * 
+     * @return polled_wcs store the polled wr_ids and status
+     * @return return 0 on success and other values on error
      */
-    int wait_until_send_completion(const int expected_num_wcs, std::vector<WorkCompletion>& polled_wcs) noexcept;
+    int wait_until_send_completion(const int expected_num_wcs, std::vector<ibv_wc>& polled_wcs) noexcept;
 
     /**
      * @brief poll the recv_cq until at least `num_expected_completions` 
      * work completions are polled or an error occurs
      * 
      * @param expected_num_wcs expected number of completions
-     * @param polled_wcs return value to store the polled wr_ids and status
-     * @return int 0 on success, other values on error. Refer to
-     * https://www.rdmamojo.com/2013/02/15/ibv_poll_cq/ for more information.
-     */
-    int wait_until_recv_completion(const int expected_num_wcs, std::vector<WorkCompletion>& polled_wcs) noexcept;
-
-    /**
-     * @brief poll the send_cq once and return the number of polled work completions on success
      * 
-     * @param max_num_wcs maximum number of work completions to poll
-     * @param polled_wcs return value to store the polled wr_ids and status
+     * @return polled_wcs store the polled wr_ids and status
+     * @return return 0 on success and other values on error
      */
-    int poll_send_cq_once(const int max_num_wcs, std::vector<WorkCompletion>& polled_wcs) noexcept;
-
-    /**
-     * @brief poll the recv_cq once and return the number of polled work completions on success
-     * 
-     * @param max_num_wcs maximum number of work completions to poll
-     * @param polled_wcs return value to store the polled wr_ids and status
-     */
-    int poll_recv_cq_once(const int max_num_wcs, std::vector<WorkCompletion>& polled_wcs) noexcept;
-
-    int wait_until_send_completion(const int expected_num_wcs, std::vector<ibv_wc>& polled_wcs) noexcept;
     int wait_until_recv_completion(const int expected_num_wcs, std::vector<ibv_wc>& polled_wcs) noexcept;
+
+    /**
+     * @brief poll the recv_cq once and return the number of polled work completions on success.
+     * Refer to https://www.rdmamojo.com/2013/02/15/ibv_poll_cq/ for more information.
+     * 
+     * @param max_num_wcs maximum number of work completions to poll
+     *
+     * @return return value:
+     * - zero: The CQ is empty
+     * - positive: Number of Work Completions that were read from the CQ
+     * - negative: A failure occurred while trying to read Work Completions from the CQ
+     * @return polled_wcs: store the polled wr_ids and status
+     */
     int poll_send_cq_once(const int max_num_wcs, std::vector<ibv_wc>& polled_wcs) noexcept;
+
+    /**
+     * @brief poll the recv_cq once and return the number of polled work completions on success.
+     * Refer to https://www.rdmamojo.com/2013/02/15/ibv_poll_cq/ for more information.
+     * 
+     * @param max_num_wcs maximum number of work completions to poll
+     *
+     * @return return value:
+     * - zero: The CQ is empty
+     * - positive: Number of Work Completions that were read from the CQ
+     * - negative: A failure occurred while trying to read Work Completions from the CQ
+     * @return polled_wcs: store the polled wr_ids and status
+     */
     int poll_recv_cq_once(const int max_num_wcs, std::vector<ibv_wc>& polled_wcs) noexcept;
 };
 

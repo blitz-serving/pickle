@@ -27,7 +27,7 @@ TEST(OpenDevice, SendRecv) {
     ASSERT_EQ(qp->query_qp_state(), ibv_qp_state::IBV_QPS_RTS);
 
     auto mr = rdma_util::MemoryRegion::create(qp->get_pd(), buffer, 1024);
-    std::vector<rdma_util::WorkCompletion> polled_recv_wcs, polled_send_wcs;
+    std::vector<ibv_wc> polled_recv_wcs, polled_send_wcs;
     ASSERT_EQ(0, qp->post_recv(1, reinterpret_cast<uint64_t>(buffer), 1024, mr->get_lkey()));
     ASSERT_EQ(0, qp->post_send_send(1, reinterpret_cast<uint64_t>(buffer), 1024, mr->get_lkey(), true));
     ASSERT_EQ(0, qp->wait_until_send_completion(1, polled_send_wcs));
@@ -50,7 +50,7 @@ TEST(OpenDevice, SendRecvError) {
     ASSERT_EQ(qp->query_qp_state(), ibv_qp_state::IBV_QPS_RTS);
 
     auto mr = rdma_util::MemoryRegion::create(qp->get_pd(), buffer, 1024);
-    std::vector<rdma_util::WorkCompletion> polled_recv_wcs, polled_send_wcs;
+    std::vector<ibv_wc> polled_recv_wcs, polled_send_wcs;
 
     qp->post_recv(1, reinterpret_cast<uint64_t>(buffer), 512, mr->get_lkey());
     qp->post_recv(2, reinterpret_cast<uint64_t>(buffer), 1024, mr->get_lkey());

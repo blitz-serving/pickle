@@ -77,9 +77,11 @@ void PickleSender::poll() noexcept(false) {
     for (const auto& wc : this->polled_recv_wcs_) {
         PICKLE_ASSERT(
             wc.status == ibv_wc_status::IBV_WC_SUCCESS && wc.opcode == ibv_wc_opcode::IBV_WC_RECV,
-            "Failed to receive data: status={}, opcode={}",
+            "Failed to receive data: status={}, opcode={}, vendor_err={}",
             int(wc.status),
-            int(wc.opcode)
+            int(wc.opcode),
+            wc.vendor_err
+
         );
         auto wr_id = wc.wr_id;
         Ticket ticket {};
@@ -222,9 +224,10 @@ void PickleSender::poll() noexcept(false) {
             );
             PICKLE_ASSERT(
                 wc.status == ibv_wc_status::IBV_WC_SUCCESS && wc.opcode == ibv_wc_opcode::IBV_WC_RDMA_WRITE,
-                "Op write_with_imm failed: status={}, opcode={}",
+                "Op write_with_imm failed: status={}, opcode={}, vendor_err={}",
                 int(wc.status),
-                int(wc.opcode)
+                int(wc.opcode),
+                int(wc.vendor_err)
             );
 
             wrid_t wr_id;
@@ -394,9 +397,10 @@ void Flusher::poll() noexcept(false) {
             TRACE("pickle::Flusher::poll() polled_completion: status={}, opcode={}", int(wc.status), int(wc.opcode));
             PICKLE_ASSERT(
                 wc.status == ibv_wc_status::IBV_WC_SUCCESS && wc.opcode == ibv_wc_opcode::IBV_WC_RDMA_READ,
-                "Failed to flush data: status={}, opcode={}",
+                "Failed to flush data: status={}, opcode={}, vendor_err={}",
                 int(wc.status),
-                int(wc.opcode)
+                int(wc.opcode),
+                wc.vendor_err
             );
             this->flushing_queue_.front()->store(true);
             this->flushing_queue_.pop();

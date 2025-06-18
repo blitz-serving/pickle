@@ -36,15 +36,15 @@ int main() {
             return 1;
         }
 
-        std::vector<rdma_util::WorkCompletion> polled_recv_wcs, polled_send_wcs;
+        std::vector<ibv_wc> polled_recv_wcs, polled_send_wcs;
         qp2->wait_until_send_completion(1, polled_send_wcs);
         for (const auto& wc : polled_send_wcs) {
-            printf("success %s\n", wc.to_string().c_str());
+            printf("polled %lu %d\n", wc.wr_id, wc.status);
         }
 
         qp1->wait_until_recv_completion(1, polled_recv_wcs);
         for (const auto& wc : polled_recv_wcs) {
-            printf("success %s\n", wc.to_string().c_str());
+            printf("polled %lu %d\n", wc.wr_id, wc.status);
         }
     }
 
