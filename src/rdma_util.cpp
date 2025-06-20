@@ -14,32 +14,28 @@
 
 namespace rdma_util {
 
-Context::Context(const char* dev_name) noexcept(false) {
-    auto dev_list = ibv_get_device_list(nullptr);
-    if (!dev_list) {
+Context::Context(const char* device_name) noexcept(false) {
+    int num_devices = 0;
+    auto device_list = ibv_get_device_list(&num_devices);
+    if (device_list == nullptr) {
         throw std::runtime_error("Failed to get device list");
     }
 
-    ibv_device* dev = nullptr;
-    for (int i = 0; dev_list[i] != nullptr; i++) {
-        if (strcmp(ibv_get_device_name(dev_list[i]), dev_name) == 0) {
-            dev = dev_list[i];
-            break;
+    for (int i = 0; device_list[i] != nullptr; i++) {
+        if (strcmp(ibv_get_device_name(device_list[i]), device_name) == 0) {
+            ibv_context* context = ibv_open_device(device_list[i]);
+            ibv_free_device_list(device_list);
+            if (context == nullptr) {
+                throw std::runtime_error("Failed to open device");
+            } else {
+                this->inner = context;
+            }
+            return;
         }
     }
 
-    if (dev == nullptr) {
-        ibv_free_device_list(dev_list);
-        throw std::runtime_error("Device not found");
-    }
-
-    auto context = ibv_open_device(dev);
-    if (context == nullptr) {
-        ibv_free_device_list(dev_list);
-        throw std::runtime_error("Failed to open device");
-    }
-
-    this->inner = context;
+    ibv_free_device_list(device_list);
+    throw std::runtime_error("Device not found");
 }
 
 Context::~Context() {
@@ -49,9 +45,24 @@ Context::~Context() {
     }
 }
 
-std::unique_ptr<Context> Context::create(const char* dev_name) noexcept(false) {
-    DEBUG("rdma_util::Context::create() creating context using {}", dev_name);
-    return std::unique_ptr<Context>(new Context(dev_name));
+std::vector<DeviceInfo> Context::get_device_infos() noexcept(false) {
+    int num_devices = 0;
+    auto device_list = ibv_get_device_list(&num_devices);
+    if (device_list == nullptr) {
+        throw std::runtime_error("Failed to get device list");
+    }
+    std::vector<DeviceInfo> devices;
+    devices.reserve(num_devices);
+    for (int i = 0; i < num_devices; i++) {
+        devices.emplace_back(ibv_get_device_name(device_list[i]), ibv_get_device_guid(device_list[i]));
+    }
+    ibv_free_device_list(device_list);
+    return devices;
+}
+
+std::unique_ptr<Context> Context::create(const char* device_name) noexcept(false) {
+    DEBUG("rdma_util::Context::create() creating context using {}", device_name);
+    return std::unique_ptr<Context>(new Context(device_name));
 }
 
 ProtectionDomain::ProtectionDomain(std::shared_ptr<Context> context) noexcept(false) {
@@ -116,8 +127,8 @@ RcQueuePair::RcQueuePair(
     this->inner = ibv_create_qp(pd->inner, &init_attr);
 }
 
-std::unique_ptr<RcQueuePair> RcQueuePair::create(const char* dev_name) noexcept(false) {
-    std::shared_ptr<Context> context = Context::create(dev_name);
+std::unique_ptr<RcQueuePair> RcQueuePair::create(const char* device_name) noexcept(false) {
+    std::shared_ptr<Context> context = Context::create(device_name);
     auto send_cq = CompletionQueue::create(context);
     auto recv_cq = CompletionQueue::create(context);
     return std::unique_ptr<RcQueuePair>(new RcQueuePair(ProtectionDomain::create(context), send_cq, recv_cq));

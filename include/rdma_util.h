@@ -8,6 +8,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "concurrentqueue.h"
 
@@ -25,6 +26,13 @@ class CompletionQueue;
 class RcQueuePair;
 class MemoryRegion;
 
+struct DeviceInfo {
+    std::string device_name;
+    __be64 guid;
+
+    DeviceInfo(const char* device_name, __be64 guid) : device_name(device_name), guid(guid) {}
+};
+
 class Context {
     friend class ProtectionDomain;
     friend class MemoryRegion;
@@ -40,10 +48,12 @@ private:
     Context(Context&&) = delete;
     Context& operator=(Context&&) = delete;
 
-    Context(const char* dev_name) noexcept(false);
+    Context(const char* device_name) noexcept(false);
 
 public:
-    static std::unique_ptr<Context> create(const char* dev_name) noexcept(false);
+    static std::unique_ptr<Context> create(const char* device_name) noexcept(false);
+
+    static std::vector<DeviceInfo> get_device_infos() noexcept(false);
 
     ~Context();
 };
@@ -124,7 +134,7 @@ private:
     ) noexcept(false);
 
 public:
-    static std::unique_ptr<RcQueuePair> create(const char* dev_name) noexcept(false);
+    static std::unique_ptr<RcQueuePair> create(const char* device_name) noexcept(false);
     static std::unique_ptr<RcQueuePair> create(std::shared_ptr<Context> context) noexcept(false);
     static std::unique_ptr<RcQueuePair> create(std::shared_ptr<ProtectionDomain> pd) noexcept(false);
     static std::unique_ptr<RcQueuePair> create(
