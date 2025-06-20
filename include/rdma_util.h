@@ -2,6 +2,7 @@
 #define _RDMA_UTIL_H_
 
 #include <infiniband/verbs.h>
+#include <linux/types.h>
 
 #include <cstdint>
 #include <memory>
@@ -171,7 +172,7 @@ public:
         uint64_t laddr,
         uint32_t length,
         uint32_t lkey,
-        uint32_t imm,
+        __be32 imm_data,
         bool signaled
     ) noexcept;
 
@@ -200,7 +201,7 @@ public:
         uint64_t laddr,
         uint64_t raddr,
         uint32_t length,
-        uint32_t imm,
+        __be32 imm_data,
         uint32_t lkey,
         uint32_t rkey,
         bool signaled

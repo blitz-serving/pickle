@@ -1,7 +1,7 @@
 #include "pickle.h"
 
 #include <infiniband/verbs.h>
-#include <netinet/in.h>
+#include <linux/types.h>
 
 #include <cstdint>
 #include <memory>
@@ -184,7 +184,7 @@ void PickleSender::poll() noexcept(false) {
 
             this->send_wr_list_[wr_list_index].wr_id = wr_id.value;
             this->send_wr_list_[wr_list_index].opcode = opcode;
-            this->send_wr_list_[wr_list_index].imm_data = htonl(stream_id);
+            this->send_wr_list_[wr_list_index].imm_data = reinterpret_cast<__be32>(stream_id);
             this->send_wr_list_[wr_list_index].wr.rdma.remote_addr = raddr;
             this->send_wr_list_[wr_list_index].wr.rdma.rkey = rkey;
             this->send_wr_list_[wr_list_index].sg_list = &(this->send_sge_list_[wr_list_index]);
@@ -351,7 +351,7 @@ void PickleRecver::poll() noexcept(false) {
             int(wc.status),
             int(wc.opcode)
         );
-        uint32_t stream_id = ntohl(wc.imm_data);
+        uint32_t stream_id = reinterpret_cast<uint32_t>(wc.imm_data);
 
         queue<Command>& queue = this->pending_local_recv_request_map_[stream_id];
         Command command = queue.front();

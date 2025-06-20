@@ -1,7 +1,7 @@
 #include "rdma_util.h"
 
 #include <infiniband/verbs.h>
-#include <netinet/in.h>
+#include <linux/types.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -309,7 +309,7 @@ int RcQueuePair::post_send_send_with_imm(
     uint64_t laddr,
     uint32_t length,
     uint32_t lkey,
-    uint32_t imm,
+    __be32 imm_data,
     bool signaled
 ) noexcept {
     ibv_sge sge {};
@@ -325,7 +325,7 @@ int RcQueuePair::post_send_send_with_imm(
     wr.sg_list = &sge;
     wr.num_sge = 1;
     wr.opcode = ibv_wr_opcode::IBV_WR_SEND_WITH_IMM;
-    wr.imm_data = htonl(imm);
+    wr.imm_data = imm_data;
     wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
 
     return ibv_post_send(this->inner, &wr, &bad_wr);
@@ -394,7 +394,7 @@ int RcQueuePair::post_send_write_with_imm(
     uint64_t laddr,
     uint64_t raddr,
     uint32_t length,
-    uint32_t imm,
+    __be32 imm_data,
     uint32_t lkey,
     uint32_t rkey,
     bool signaled
@@ -415,7 +415,7 @@ int RcQueuePair::post_send_write_with_imm(
     wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
     wr.wr.rdma.remote_addr = raddr;
     wr.wr.rdma.rkey = rkey;
-    wr.imm_data = htonl(imm);
+    wr.imm_data = imm_data;
 
     return ibv_post_send(this->inner, &wr, &bad_wr);
 }
