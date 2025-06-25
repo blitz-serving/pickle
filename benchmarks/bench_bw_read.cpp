@@ -1,4 +1,5 @@
 #include <cuda_runtime.h>
+#include <infiniband/verbs.h>
 
 #include <atomic>
 #include <cstdint>
@@ -10,16 +11,18 @@
 
 #include "rdma_util.h"
 
+constexpr const char* kDevice1 = "mlx5_0";
+constexpr const char* kDevice2 = "mlx5_1";
+constexpr int32_t kGPU1 = 0;
+constexpr int32_t kGPU2 = 1;
 constexpr uint64_t kChunkSize = 64ull * 1024 * 1024;
 constexpr uint64_t kSlotNum = 1;
 constexpr uint64_t kBufferSize = kChunkSize * kSlotNum;
 constexpr uint64_t kReadCount = 128ull * 1024 * 1024 * 1024 / kChunkSize;
 constexpr uint64_t kThreadNum = 1;
+constexpr int32_t kGidIndex = 3;
 
 static std::atomic<uint64_t> g_bytes_transferred(0);
-
-constexpr const char* kDevice1 = "mlx5_0";
-constexpr const char* kDevice2 = "mlx5_1";
 
 #define CUDA_CHECK(expr)                                                                               \
     do {                                                                                               \
@@ -38,18 +41,25 @@ constexpr const char* kDevice2 = "mlx5_1";
         }                                                                                  \
     } while (0)
 
-void* malloc_buffer(uint64_t size) {
-    void* p = nullptr;
-    // cudaSetDevice(2);
-    // CUDA_CHECK(cudaMalloc(&p, size));
-    p = malloc(size);
+void* malloc_host_buffer(uint64_t size) {
+    void* p = malloc(size);
     ASSERT(p != nullptr);
     return p;
 }
 
-void free_buffer(void* p) {
-    // CUDA_CHECK(cudaFree(p));
+void free_host_buffer(void* p) {
     free(p);
+}
+
+void* malloc_device_buffer(uint64_t size, int device) {
+    void* p = nullptr;
+    CUDA_CHECK(cudaSetDevice(device));
+    CUDA_CHECK(cudaMalloc(&p, size));
+    return p;
+}
+
+void free_device_buffer(void* p) {
+    CUDA_CHECK(cudaFree(p));
 }
 
 int reporter_thread();
@@ -59,9 +69,26 @@ int read_thread(
     std::shared_ptr<rdma_util::MemoryRegion> remote_mr
 );
 
-int main() {
-    auto send_buffer = std::shared_ptr<void>(malloc_buffer(kBufferSize), free_buffer);
-    auto recv_buffer = std::shared_ptr<void>(malloc_buffer(kBufferSize), free_buffer);
+int main(int argc, char** argv) {
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s <host|device>\n", argv[0]);
+        return -1;
+    }
+
+    std::shared_ptr<void> send_buffer, recv_buffer;
+
+    if (strcmp(argv[1], "host") == 0) {
+        printf("Using host buffer\n");
+        send_buffer = std::shared_ptr<void>(malloc_host_buffer(kBufferSize), free_host_buffer);
+        recv_buffer = std::shared_ptr<void>(malloc_host_buffer(kBufferSize), free_host_buffer);
+    } else if (strcmp(argv[1], "device") == 0) {
+        printf("Using device buffer\n");
+        send_buffer = std::shared_ptr<void>(malloc_device_buffer(kBufferSize, kGPU1), free_device_buffer);
+        recv_buffer = std::shared_ptr<void>(malloc_device_buffer(kBufferSize, kGPU2), free_device_buffer);
+    } else {
+        fprintf(stderr, "Invalid argument: %s. Use 'host' or 'device'.\n", argv[1]);
+        return -1;
+    }
 
     auto send_buffer_ptr = send_buffer.get();
     auto recv_buffer_ptr = recv_buffer.get();
@@ -88,8 +115,8 @@ int main() {
             std::shared_ptr<rdma_util::RcQueuePair> qp1 = rdma_util::RcQueuePair::create(pd1);
             std::shared_ptr<rdma_util::RcQueuePair> qp2 = rdma_util::RcQueuePair::create(pd2);
 
-            qp1->bring_up(qp2->get_handshake_data(3), 3);
-            qp2->bring_up(qp1->get_handshake_data(3), 3);
+            qp1->bring_up(qp2->get_handshake_data(kGidIndex), kGidIndex);
+            qp2->bring_up(qp1->get_handshake_data(kGidIndex), kGidIndex);
 
             qp_list_1.push_back(qp1);
             qp_list_2.push_back(qp2);
@@ -152,7 +179,13 @@ int read_thread(
         }
         for (const auto& wc : wcs) {
             if (wc.status) {
-                printf("Failed to read data. status: %d\n", wc.status);
+                printf(
+                    "Failed to read data. status=%d, opcode=%d, vendor_err=%d, status_str\"%s\"\n",
+                    wc.status,
+                    wc.opcode,
+                    wc.vendor_err,
+                    ibv_wc_status_str(wc.status)
+                );
                 return -1;
             }
             read_polled++;

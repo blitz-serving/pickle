@@ -15,14 +15,13 @@
 
 constexpr const char* kRNIC1 = "mlx5_0";
 constexpr const char* kRNIC2 = "mlx5_1";
-constexpr const uint64_t kPacketSize = 256 * 1024;
-constexpr const int32_t kGPU1 = 0;
-constexpr const int32_t kGPU2 = 1;
-constexpr const uint32_t kGidIndex = 3;
-
-constexpr const uint64_t kDataBufferSize = 1ull * 16 * 1024 * 1024 * 1024;
-constexpr const uint32_t kChunkSize = 1ull * 1024 * 1024;
-constexpr const ibv_rate kRate = ibv_rate::IBV_RATE_MAX;
+constexpr int32_t kGPU1 = 0;
+constexpr int32_t kGPU2 = 1;
+constexpr uint32_t kGidIndex = 3;
+constexpr uint64_t kPacketSize = 1024;
+constexpr uint64_t kDataBufferSize = 1ull * 16 * 1024 * 1024 * 1024;
+constexpr uint32_t kChunkSize = 1ull * 1024 * 1024;
+constexpr ibv_rate kRate = ibv_rate::IBV_RATE_MAX;
 
 static std::atomic<uint64_t> bytes_transferred(0);
 static std::atomic<bool> recver_exited(false);
@@ -45,18 +44,25 @@ static std::atomic<bool> sender_exited(false);
         }                                                                                  \
     } while (0)
 
-void* malloc_buffer(uint64_t size, int device = 0) {
-    void* p = nullptr;
-    // cudaSetDevice(device);
-    // CUDA_CHECK(cudaMalloc(&p, size));
-    p = malloc(size);
+void* malloc_host_buffer(uint64_t size) {
+    void* p = malloc(size);
     ASSERT(p != nullptr);
     return p;
 }
 
-void free_buffer(void* p) {
-    // CUDA_CHECK(cudaFree(p));
+void free_host_buffer(void* p) {
     free(p);
+}
+
+void* malloc_device_buffer(uint64_t size, int device) {
+    void* p = nullptr;
+    CUDA_CHECK(cudaSetDevice(device));
+    CUDA_CHECK(cudaMalloc(&p, size));
+    return p;
+}
+
+void free_device_buffer(void* p) {
+    CUDA_CHECK(cudaFree(p));
 }
 
 void reporter_thread() {
@@ -116,23 +122,37 @@ void recver_thread(
     recver_exited.store(true);
 };
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s <host|device>\n", argv[0]);
+        return -1;
+    }
+
+    std::shared_ptr<void> buffer1, buffer2;
+
+    if (strcmp(argv[1], "host") == 0) {
+        printf("Using host buffer\n");
+        buffer1 = std::shared_ptr<void>(malloc_host_buffer(kDataBufferSize), free_host_buffer);
+        buffer2 = std::shared_ptr<void>(malloc_host_buffer(kDataBufferSize), free_host_buffer);
+    } else if (strcmp(argv[1], "device") == 0) {
+        printf("Using device buffer\n");
+        buffer1 = std::shared_ptr<void>(malloc_device_buffer(kDataBufferSize, kGPU1), free_device_buffer);
+        buffer2 = std::shared_ptr<void>(malloc_device_buffer(kDataBufferSize, kGPU2), free_device_buffer);
+    } else {
+        fprintf(stderr, "Invalid argument: %s. Use 'host' or 'device'.\n", argv[1]);
+        return -1;
+    }
+
     auto qp1 = rdma_util::RcQueuePair::create(kRNIC1);
     auto qp2 = rdma_util::RcQueuePair::create(kRNIC2);
 
     qp1->bring_up(qp2->get_handshake_data(kGidIndex), kGidIndex, kRate);
     qp2->bring_up(qp1->get_handshake_data(kGidIndex), kGidIndex, kRate);
 
-    std::shared_ptr<rdma_util::MemoryRegion> data_mr1 = rdma_util::MemoryRegion::create(
-        qp1->get_pd(),
-        std::shared_ptr<void>(malloc_buffer(kDataBufferSize, kGPU1), free_buffer),
-        kDataBufferSize
-    );
-    std::shared_ptr<rdma_util::MemoryRegion> data_mr2 = rdma_util::MemoryRegion::create(
-        qp2->get_pd(),
-        std::shared_ptr<void>(malloc_buffer(kDataBufferSize, kGPU2), free_buffer),
-        kDataBufferSize
-    );
+    std::shared_ptr<rdma_util::MemoryRegion> data_mr1 =
+        rdma_util::MemoryRegion::create(qp1->get_pd(), buffer1.get(), kDataBufferSize);
+    std::shared_ptr<rdma_util::MemoryRegion> data_mr2 =
+        rdma_util::MemoryRegion::create(qp2->get_pd(), buffer1.get(), kDataBufferSize);
 
     std::shared_ptr<pickle::Flusher> flusher = pickle::Flusher::create(qp2->get_pd());
 
@@ -140,8 +160,8 @@ int main() {
     auto recver = pickle::PickleRecver::create(std::move(qp2), flusher);
 
     std::thread thread_reporter(reporter_thread);
-    std::thread thread_sender(sender_thread, sender, data_mr1, 20250102);
-    std::thread thread_recver(recver_thread, recver, data_mr2, 20250102);
+    std::thread thread_sender(sender_thread, sender, data_mr1, 20250625);
+    std::thread thread_recver(recver_thread, recver, data_mr2, 20250625);
     std::thread thread_poller([sender, recver, flusher] {
         while (!(recver_exited.load() && sender_exited.load())) {
             sender->poll();
