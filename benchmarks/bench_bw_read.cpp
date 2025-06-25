@@ -15,11 +15,11 @@ constexpr const char* kDevice1 = "mlx5_0";
 constexpr const char* kDevice2 = "mlx5_1";
 constexpr int32_t kGPU1 = 0;
 constexpr int32_t kGPU2 = 1;
-constexpr uint64_t kChunkSize = 64ull * 1024 * 1024;
-constexpr uint64_t kSlotNum = 1;
+constexpr uint64_t kChunkSize = 32ull * 1024 * 1024;
+constexpr uint64_t kSlotNum = 8;
 constexpr uint64_t kBufferSize = kChunkSize * kSlotNum;
 constexpr uint64_t kReadCount = 128ull * 1024 * 1024 * 1024 / kChunkSize;
-constexpr uint64_t kThreadNum = 1;
+constexpr uint64_t kThreadNum = 4;
 constexpr int32_t kGidIndex = 3;
 
 static std::atomic<uint64_t> g_bytes_transferred(0);
@@ -143,7 +143,7 @@ int reporter_thread() {
     while (1) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
         curr = g_bytes_transferred.load();
-        bandwidth = (curr - prev) / 1024.0 / 1024.0 / 1024.0;
+        bandwidth = (curr - prev) / 1000.0 / 1000.0 / 1000.0;
         printf("Bandwidth: %.2f GB/s\n", bandwidth);
         prev = curr;
         if (curr >= kThreadNum * kReadCount * kChunkSize) {
