@@ -217,6 +217,143 @@ public:
         bool signaled
     ) noexcept;
 
+    /**
+     * @brief fill the work request structure and scatter-gather 
+     * entry for a send operation
+     * 
+     * @param wr_id work request id
+     * @param laddr local address
+     * @param length length of the data to send
+     * @param lkey local memory region key
+     * @param signaled whether the work request is signaled
+     * @return wr work request structure to fill
+     * @return sge scatter-gather entry to fill
+     */
+    static void fill_post_send_send_wr(
+        uint64_t wr_id,
+        uint64_t laddr,
+        uint32_t length,
+        uint32_t lkey,
+        bool signaled,
+        ibv_send_wr& wr,
+        ibv_sge& sge
+    ) noexcept;
+
+    /**
+     * @brief fill the work request structure and scatter-gather 
+     * entry for a send operation with immediate data
+     * 
+     * @param wr_id work request id
+     * @param laddr local address
+     * @param length length of the data to send
+     * @param lkey local memory region key
+     * @param imm_data immediate data to send
+     * @param signaled whether the work request is signaled
+     * @return wr work request structure to fill
+     * @return sge scatter-gather entry to fill
+     */
+    static void fill_post_send_send_with_imm_wr(
+        uint64_t wr_id,
+        uint64_t laddr,
+        uint32_t length,
+        uint32_t lkey,
+        __be32 imm_data,
+        bool signaled,
+        ibv_send_wr& wr,
+        ibv_sge& sge
+    ) noexcept;
+
+    /**
+     * @brief fill the work request structure and scatter-gather 
+     * entry for a read operation
+     * 
+     * @param wr_id work request id
+     * @param laddr local address
+     * @param raddr remote address
+     * @param length length of the data to read
+     * @param lkey local memory region key
+     * @param rkey remote memory region key
+     * @param signaled whether the work request is signaled
+     * @return wr work request structure to fill
+     * @return sge scatter-gather entry to fill
+     */
+    static void fill_post_send_read_wr(
+        uint64_t wr_id,
+        uint64_t laddr,
+        uint64_t raddr,
+        uint32_t length,
+        uint32_t lkey,
+        uint32_t rkey,
+        bool signaled,
+        ibv_send_wr& wr,
+        ibv_sge& sge
+    ) noexcept;
+
+    /**
+     * @brief fill the work request structure and scatter-gather 
+     * entry for a write operation
+     * 
+     * @param wr_id work request id
+     * @param laddr local address
+     * @param raddr remote address
+     * @param length length of the data to write
+     * @param lkey local memory region key
+     * @param rkey remote memory region key
+     * @param signaled whether the work request is signaled
+     * @return wr work request structure to fill
+     * @return sge scatter-gather entry to fill
+     */
+    static void fill_post_send_write_wr(
+        uint64_t wr_id,
+        uint64_t laddr,
+        uint64_t raddr,
+        uint32_t length,
+        uint32_t lkey,
+        uint32_t rkey,
+        bool signaled,
+        ibv_send_wr& wr,
+        ibv_sge& sge
+    ) noexcept;
+
+    /**
+     * @brief fill the work request structure and scatter-gather 
+     * entry for a write operation with immediate data
+     * 
+     * @param wr_id work request id
+     * @param laddr local address
+     * @param raddr remote address
+     * @param length length of the data to write
+     * @param imm_data immediate data to send
+     * @param lkey local memory region key
+     * @param rkey remote memory region key
+     * @param signaled whether the work request is signaled
+     * @return wr work request structure to fill
+     * @return sge scatter-gather entry to fill
+     */
+    static void fill_post_send_write_with_imm_wr(
+        uint64_t wr_id,
+        uint64_t laddr,
+        uint64_t raddr,
+        uint32_t length,
+        __be32 imm_data,
+        uint32_t lkey,
+        uint32_t rkey,
+        bool signaled,
+        ibv_send_wr& wr,
+        ibv_sge& sge
+    ) noexcept;
+
+    /**
+     * @brief freeze the work request list by linking the work requests
+     * together. The last work request's next pointer is set to nullptr.
+     * 
+     * @param wr_list work request list to freeze
+     * @param length length of the work request list, must be greater than zero
+     * 
+     * @return return 0 on success and -1 when length is zero
+     */
+    static int freeze_wr_list(ibv_send_wr* wr_list, uint64_t length) noexcept;
+
     int post_send_wrs(ibv_send_wr* wr_list) noexcept;
 
     int post_recv(uint64_t wr_id, uint64_t laddr, uint32_t length, uint32_t lkey) noexcept;

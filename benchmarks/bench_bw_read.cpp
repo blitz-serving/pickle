@@ -5,7 +5,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <ctime>
 #include <memory>
+#include <random>
 #include <thread>
 #include <vector>
 
@@ -15,11 +18,12 @@ constexpr const char* kDevice1 = "mlx5_0";
 constexpr const char* kDevice2 = "mlx5_1";
 constexpr int32_t kGPU1 = 0;
 constexpr int32_t kGPU2 = 1;
-constexpr uint64_t kChunkSize = 64ull * 1024 * 1024;
-constexpr uint64_t kSlotNum = 1;
-constexpr uint64_t kBufferSize = kChunkSize * kSlotNum;
-constexpr uint64_t kReadCount = 128ull * 1024 * 1024 * 1024 / kChunkSize;
-constexpr uint64_t kThreadNum = 1;
+constexpr uint64_t kChunkSize = 64ull * 1024;
+constexpr uint64_t kBufferSize = 4ull * 1024 * 1024 * 1024;
+constexpr uint64_t kSlotNum = kBufferSize / kChunkSize;
+constexpr uint64_t kOutstandingReads = 16;
+constexpr uint64_t kReadCount = 64ull * 1024 * 1024 * 1024 / kChunkSize;
+constexpr uint64_t kThreadNum = 8;
 constexpr int32_t kGidIndex = 3;
 
 static std::atomic<uint64_t> g_bytes_transferred(0);
@@ -75,26 +79,26 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    std::shared_ptr<void> send_buffer, recv_buffer;
+    std::shared_ptr<void> buffer_1, buffer_2;
 
     if (strcmp(argv[1], "host") == 0) {
         printf("Using host buffer\n");
-        send_buffer = std::shared_ptr<void>(malloc_host_buffer(kBufferSize), free_host_buffer);
-        recv_buffer = std::shared_ptr<void>(malloc_host_buffer(kBufferSize), free_host_buffer);
+        buffer_1 = std::shared_ptr<void>(malloc_host_buffer(kBufferSize), free_host_buffer);
+        buffer_2 = std::shared_ptr<void>(malloc_host_buffer(kBufferSize), free_host_buffer);
     } else if (strcmp(argv[1], "device") == 0) {
         printf("Using device buffer\n");
-        send_buffer = std::shared_ptr<void>(malloc_device_buffer(kBufferSize, kGPU1), free_device_buffer);
-        recv_buffer = std::shared_ptr<void>(malloc_device_buffer(kBufferSize, kGPU2), free_device_buffer);
+        buffer_1 = std::shared_ptr<void>(malloc_device_buffer(kBufferSize, kGPU1), free_device_buffer);
+        buffer_2 = std::shared_ptr<void>(malloc_device_buffer(kBufferSize, kGPU2), free_device_buffer);
     } else {
         fprintf(stderr, "Invalid argument: %s. Use 'host' or 'device'.\n", argv[1]);
         return -1;
     }
 
-    auto send_buffer_ptr = send_buffer.get();
-    auto recv_buffer_ptr = recv_buffer.get();
+    auto buffer_ptr_1 = buffer_1.get();
+    auto buffer_ptr_2 = buffer_2.get();
 
-    printf("send_buffer_addr: %p\n", send_buffer_ptr);
-    printf("recv_buffer_addr: %p\n", recv_buffer_ptr);
+    printf("buffer_addr_1: %p\n", buffer_ptr_1);
+    printf("buffer_addr_2: %p\n", buffer_ptr_2);
 
     {
         std::vector<std::shared_ptr<rdma_util::RcQueuePair>> qp_list_1;
@@ -103,13 +107,11 @@ int main(int argc, char** argv) {
 
         std::shared_ptr<rdma_util::ProtectionDomain> pd1 =
             rdma_util::ProtectionDomain::create(rdma_util::Context::create(kDevice1));
-        std::shared_ptr<rdma_util::MemoryRegion> mr1 =
-            rdma_util::MemoryRegion::create(pd1, send_buffer_ptr, kBufferSize);
+        std::shared_ptr<rdma_util::MemoryRegion> mr1 = rdma_util::MemoryRegion::create(pd1, buffer_ptr_1, kBufferSize);
 
         std::shared_ptr<rdma_util::ProtectionDomain> pd2 =
             rdma_util::ProtectionDomain::create(rdma_util::Context::create(kDevice2));
-        std::shared_ptr<rdma_util::MemoryRegion> mr2 =
-            rdma_util::MemoryRegion::create(pd2, recv_buffer_ptr, kBufferSize);
+        std::shared_ptr<rdma_util::MemoryRegion> mr2 = rdma_util::MemoryRegion::create(pd2, buffer_ptr_2, kBufferSize);
 
         for (uint64_t i = 0; i < kThreadNum; ++i) {
             std::shared_ptr<rdma_util::RcQueuePair> qp1 = rdma_util::RcQueuePair::create(pd1);
@@ -142,8 +144,8 @@ int reporter_thread() {
 
     while (1) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
-        curr = g_bytes_transferred.load();
-        bandwidth = (curr - prev) / 1024.0 / 1024.0 / 1024.0;
+        curr = g_bytes_transferred.load(std::memory_order_relaxed);
+        bandwidth = (curr - prev) / 1000.0 / 1000.0 / 1000.0;
         printf("Bandwidth: %.2f GB/s\n", bandwidth);
         prev = curr;
         if (curr >= kThreadNum * kReadCount * kChunkSize) {
@@ -157,6 +159,9 @@ int read_thread(
     std::shared_ptr<rdma_util::MemoryRegion> local_mr,
     std::shared_ptr<rdma_util::MemoryRegion> remote_mr
 ) {
+    std::mt19937 rng(std::hash<std::thread::id> {}(std::this_thread::get_id()));
+    std::uniform_int_distribution<uint64_t> dist(0, kSlotNum - 1);
+
     uint64_t base_laddr = uint64_t(local_mr->get_addr());
     uint64_t base_raddr = uint64_t(remote_mr->get_addr());
     const uint32_t lkey = local_mr->get_lkey();
@@ -164,46 +169,82 @@ int read_thread(
 
     uint64_t read_posted = 0, read_polled = 0;
 
-    for (uint64_t i = 0; i < kSlotNum; ++i) {
-        qp->post_send_read(i, base_laddr + i * kChunkSize, base_raddr + i * kChunkSize, kChunkSize, lkey, rkey, true);
-        read_posted++;
+    std::vector<ibv_send_wr> wr_list(kOutstandingReads);
+    std::vector<ibv_sge> sge_list(kOutstandingReads);
+    qp->post_send_wrs(nullptr);
+
+    uint64_t wr_id = 0;
+
+    for (uint64_t i = 0; i < kOutstandingReads; ++i) {
+        uint64_t slot_index = dist(rng);
+        rdma_util::RcQueuePair::fill_post_send_read_wr(
+            wr_id++,
+            base_laddr + slot_index * kChunkSize,
+            base_raddr + slot_index * kChunkSize,
+            kChunkSize,
+            lkey,
+            rkey,
+            true,
+            wr_list[i],
+            sge_list[i]
+        );
     }
+    ASSERT(rdma_util::RcQueuePair::freeze_wr_list(wr_list.data(), kOutstandingReads) == 0);
+    qp->post_send_wrs(wr_list.data());
+    read_posted += kOutstandingReads;
 
     std::vector<ibv_wc> wcs;
-    wcs.reserve(kSlotNum);
+    wcs.reserve(kOutstandingReads);
 
+    int n;
     while (read_polled < kReadCount) {
-        if (qp->poll_send_cq_once(kSlotNum, wcs) < 0) {
+        n = qp->poll_send_cq_once(kOutstandingReads, wcs);
+        if (n < 0) {
             printf("Failed to poll recv CQ\n");
             return -1;
-        }
-        for (const auto& wc : wcs) {
-            if (wc.status) {
-                printf(
-                    "Failed to read data. status=%d, opcode=%d, vendor_err=%d, status_str\"%s\"\n",
-                    wc.status,
-                    wc.opcode,
-                    wc.vendor_err,
-                    ibv_wc_status_str(wc.status)
-                );
-                return -1;
+        } else if (n == 0) {
+            continue;
+        } else {
+            read_polled += n;
+            g_bytes_transferred.fetch_add(kChunkSize * n, std::memory_order_relaxed);
+            for (const auto& wc : wcs) {
+                if (wc.status) {
+                    printf(
+                        "Failed to read data. status=%d, opcode=%d, vendor_err=%d, status_str=\"%s\"\n",
+                        wc.status,
+                        wc.opcode,
+                        wc.vendor_err,
+                        ibv_wc_status_str(wc.status)
+                    );
+                    return -1;
+                }
             }
-            read_polled++;
-            g_bytes_transferred.fetch_add(kChunkSize);
-            if (read_posted < kReadCount) {
-                qp->post_send_read(
-                    wc.wr_id,
-                    base_laddr + wc.wr_id * kChunkSize,
-                    base_raddr + wc.wr_id * kChunkSize,
+
+            if (read_polled >= kReadCount) {
+                break;
+            } else if (read_posted == kReadCount) {
+                continue;
+            }
+
+            int valid_length = std::min<int>(n, kReadCount - read_posted);
+            for (int i = 0; i < valid_length; ++i) {
+                uint64_t slot_index = dist(rng);
+                rdma_util::RcQueuePair::fill_post_send_read_wr(
+                    wr_id++,
+                    base_laddr + slot_index * kChunkSize,
+                    base_raddr + slot_index * kChunkSize,
                     kChunkSize,
                     lkey,
                     rkey,
-                    true
+                    true,
+                    wr_list[i],
+                    sge_list[i]
                 );
-                read_posted++;
             }
+            ASSERT(rdma_util::RcQueuePair::freeze_wr_list(wr_list.data(), valid_length) == 0);
+            qp->post_send_wrs(wr_list.data());
+            read_posted += valid_length;
         }
     }
-
     return 0;
 }

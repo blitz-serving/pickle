@@ -210,6 +210,7 @@ void RcQueuePair::bring_up(const HandshakeData& handshake_data, uint32_t gid_ind
         ibv_qp_attr attr;
         ibv_qp_init_attr init_attr;
         int ret = ibv_query_qp(this->inner, &attr, mask, &init_attr);
+
         PICKLE_ASSERT(ret == 0, "Failed to query QP state");
         if (attr.qp_state == ibv_qp_state::IBV_QPS_RTS) {
             WARN("QP state is already RTS");
@@ -300,18 +301,7 @@ int RcQueuePair::post_send_send(
     ibv_sge sge {};
     ibv_send_wr wr {};
     ibv_send_wr* bad_wr;
-
-    sge.addr = laddr;
-    sge.length = length;
-    sge.lkey = lkey;
-
-    wr.wr_id = wr_id;
-    wr.next = nullptr;
-    wr.sg_list = &sge;
-    wr.num_sge = 1;
-    wr.opcode = ibv_wr_opcode::IBV_WR_SEND;
-    wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
-
+    RcQueuePair::fill_post_send_send_wr(wr_id, laddr, length, lkey, signaled, wr, sge);
     return ibv_post_send(this->inner, &wr, &bad_wr);
 }
 
@@ -326,19 +316,7 @@ int RcQueuePair::post_send_send_with_imm(
     ibv_sge sge {};
     ibv_send_wr wr {};
     ibv_send_wr* bad_wr = nullptr;
-
-    sge.addr = laddr;
-    sge.length = length;
-    sge.lkey = lkey;
-
-    wr.wr_id = wr_id;
-    wr.next = nullptr;
-    wr.sg_list = &sge;
-    wr.num_sge = 1;
-    wr.opcode = ibv_wr_opcode::IBV_WR_SEND_WITH_IMM;
-    wr.imm_data = imm_data;
-    wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
-
+    RcQueuePair::fill_post_send_send_with_imm_wr(wr_id, laddr, length, lkey, imm_data, signaled, wr, sge);
     return ibv_post_send(this->inner, &wr, &bad_wr);
 }
 
@@ -354,20 +332,7 @@ int RcQueuePair::post_send_read(
     ibv_sge sge {};
     ibv_send_wr wr {};
     ibv_send_wr* bad_wr = nullptr;
-
-    sge.addr = laddr;
-    sge.length = length;
-    sge.lkey = lkey;
-
-    wr.wr_id = wr_id;
-    wr.next = nullptr;
-    wr.sg_list = &sge;
-    wr.num_sge = 1;
-    wr.opcode = ibv_wr_opcode::IBV_WR_RDMA_READ;
-    wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
-    wr.wr.rdma.remote_addr = raddr;
-    wr.wr.rdma.rkey = rkey;
-
+    RcQueuePair::fill_post_send_read_wr(wr_id, laddr, raddr, length, lkey, rkey, signaled, wr, sge);
     return ibv_post_send(this->inner, &wr, &bad_wr);
 }
 
@@ -383,20 +348,7 @@ int RcQueuePair::post_send_write(
     ibv_sge sge {};
     ibv_send_wr wr {};
     ibv_send_wr* bad_wr = nullptr;
-
-    sge.addr = laddr;
-    sge.length = length;
-    sge.lkey = lkey;
-
-    wr.wr_id = wr_id;
-    wr.next = nullptr;
-    wr.sg_list = &sge;
-    wr.num_sge = 1;
-    wr.opcode = ibv_wr_opcode::IBV_WR_RDMA_WRITE;
-    wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
-    wr.wr.rdma.remote_addr = raddr;
-    wr.wr.rdma.rkey = rkey;
-
+    RcQueuePair::fill_post_send_write_wr(wr_id, laddr, raddr, length, lkey, rkey, signaled, wr, sge);
     return ibv_post_send(this->inner, &wr, &bad_wr);
 }
 
@@ -413,7 +365,116 @@ int RcQueuePair::post_send_write_with_imm(
     ibv_sge sge {};
     ibv_send_wr wr {};
     ibv_send_wr* bad_wr = nullptr;
+    RcQueuePair::fill_post_send_write_with_imm_wr(wr_id, laddr, raddr, length, imm_data, lkey, rkey, signaled, wr, sge);
+    return ibv_post_send(this->inner, &wr, &bad_wr);
+}
 
+void RcQueuePair::fill_post_send_send_wr(
+    uint64_t wr_id,
+    uint64_t laddr,
+    uint32_t length,
+    uint32_t lkey,
+    bool signaled,
+    ibv_send_wr& wr,
+    ibv_sge& sge
+) noexcept {
+    sge.addr = laddr;
+    sge.length = length;
+    sge.lkey = lkey;
+
+    wr.wr_id = wr_id;
+    wr.next = nullptr;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+    wr.opcode = ibv_wr_opcode::IBV_WR_SEND;
+    wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
+}
+
+void RcQueuePair::fill_post_send_send_with_imm_wr(
+    uint64_t wr_id,
+    uint64_t laddr,
+    uint32_t length,
+    uint32_t lkey,
+    __be32 imm_data,
+    bool signaled,
+    ibv_send_wr& wr,
+    ibv_sge& sge
+) noexcept {
+    sge.addr = laddr;
+    sge.length = length;
+    sge.lkey = lkey;
+
+    wr.wr_id = wr_id;
+    wr.next = nullptr;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+    wr.opcode = ibv_wr_opcode::IBV_WR_SEND_WITH_IMM;
+    wr.imm_data = imm_data;
+    wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
+}
+
+void RcQueuePair::fill_post_send_read_wr(
+    uint64_t wr_id,
+    uint64_t laddr,
+    uint64_t raddr,
+    uint32_t length,
+    uint32_t lkey,
+    uint32_t rkey,
+    bool signaled,
+    ibv_send_wr& wr,
+    ibv_sge& sge
+) noexcept {
+    sge.addr = laddr;
+    sge.length = length;
+    sge.lkey = lkey;
+
+    wr.wr_id = wr_id;
+    wr.next = nullptr;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+    wr.opcode = ibv_wr_opcode::IBV_WR_RDMA_READ;
+    wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
+    wr.wr.rdma.remote_addr = raddr;
+    wr.wr.rdma.rkey = rkey;
+}
+
+void RcQueuePair::fill_post_send_write_wr(
+    uint64_t wr_id,
+    uint64_t laddr,
+    uint64_t raddr,
+    uint32_t length,
+    uint32_t lkey,
+    uint32_t rkey,
+    bool signaled,
+    ibv_send_wr& wr,
+    ibv_sge& sge
+) noexcept {
+    sge.addr = laddr;
+    sge.length = length;
+    sge.lkey = lkey;
+
+    wr.wr_id = wr_id;
+    wr.next = nullptr;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+    wr.opcode = ibv_wr_opcode::IBV_WR_RDMA_WRITE;
+    wr.send_flags = signaled ? uint32_t(ibv_send_flags::IBV_SEND_SIGNALED) : 0;
+    wr.wr.rdma.remote_addr = raddr;
+    wr.wr.rdma.rkey = rkey;
+}
+
+void RcQueuePair::fill_post_send_write_with_imm_wr(
+    uint64_t wr_id,
+    uint64_t laddr,
+    uint64_t raddr,
+    uint32_t length,
+    __be32 imm_data,
+    uint32_t lkey,
+    uint32_t rkey,
+    bool signaled,
+    ibv_send_wr& wr,
+    ibv_sge& sge
+) noexcept {
     sge.addr = laddr;
     sge.length = length;
     sge.lkey = lkey;
@@ -427,8 +488,17 @@ int RcQueuePair::post_send_write_with_imm(
     wr.wr.rdma.remote_addr = raddr;
     wr.wr.rdma.rkey = rkey;
     wr.imm_data = imm_data;
+}
 
-    return ibv_post_send(this->inner, &wr, &bad_wr);
+int RcQueuePair::freeze_wr_list(ibv_send_wr* wr_list, uint64_t length) noexcept {
+    if (length == 0) {
+        return -1;
+    }
+    for (uint64_t i = 0; i < length - 1; ++i) {
+        wr_list[i].next = &wr_list[i + 1];
+    }
+    wr_list[length - 1].next = nullptr;
+    return 0;
 }
 
 int RcQueuePair::post_send_wrs(ibv_send_wr* wr_list) noexcept {
