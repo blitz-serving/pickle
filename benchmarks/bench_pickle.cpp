@@ -86,13 +86,13 @@ void sender_thread(
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t lkey = data_mr->get_lkey();
 
-    std::vector<pickle::Handle> handles;
+    std::vector<std::shared_ptr<pickle::Event>> handles;
     for (uint64_t i = 0; i < kDataBufferSize / kChunkSize; ++i) {
         handles.push_back(sender->send(stream_id, base_addr + i * kChunkSize, kChunkSize, lkey));
     }
 
     for (const auto& handle : handles) {
-        handle.wait();
+        handle->wait();
     }
 
     while (bytes_transferred.load() < kDataBufferSize / kChunkSize * kChunkSize) {
@@ -110,13 +110,13 @@ void recver_thread(
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t rkey = data_mr->get_rkey();
 
-    std::vector<pickle::Handle> handles;
+    std::vector<std::shared_ptr<pickle::Event>> handles;
     for (uint64_t i = 0; i < kDataBufferSize / kChunkSize; ++i) {
         handles.push_back(recver->recv(stream_id, base_addr + i * kChunkSize, kChunkSize, rkey));
     }
 
     for (const auto& handle : handles) {
-        handle.wait();
+        handle->wait();
         bytes_transferred.fetch_add(kChunkSize);
     }
     recver_exited.store(true);
@@ -149,12 +149,10 @@ int main(int argc, char** argv) {
     qp1->bring_up(qp2->get_handshake_data(kGidIndex), kGidIndex, kRate);
     qp2->bring_up(qp1->get_handshake_data(kGidIndex), kGidIndex, kRate);
 
-    std::shared_ptr<rdma_util::MemoryRegion> data_mr1 =
-        rdma_util::MemoryRegion::create(qp1->get_pd(), buffer1.get(), kDataBufferSize);
-    std::shared_ptr<rdma_util::MemoryRegion> data_mr2 =
-        rdma_util::MemoryRegion::create(qp2->get_pd(), buffer1.get(), kDataBufferSize);
+    std::shared_ptr data_mr1 = rdma_util::MemoryRegion::create(qp1->get_pd(), buffer1.get(), kDataBufferSize);
+    std::shared_ptr data_mr2 = rdma_util::MemoryRegion::create(qp2->get_pd(), buffer1.get(), kDataBufferSize);
 
-    std::shared_ptr<pickle::Flusher> flusher = pickle::Flusher::create(qp2->get_pd());
+    std::shared_ptr flusher = pickle::Flusher::create(qp2->get_pd());
 
     auto sender = pickle::PickleSender::create(std::move(qp1), kPacketSize);
     auto recver = pickle::PickleRecver::create(std::move(qp2), flusher);

@@ -53,7 +53,7 @@ int parent() {
 
     // 初始化数据（示例）
     char message[DATA_SIZE] {};
-    memcpy(message, "Hello, CUDA!", sizeof(message));
+    memcpy(message, "Hello, CUDA!", strlen("Hello, CUDA!") + 1);
     cudaMemcpy(d_data, message, DATA_SIZE, cudaMemcpyHostToDevice);
 
     // 5. 获取IPC句柄

@@ -6,11 +6,11 @@
 
 #include <cstdint>
 #include <memory>
-#include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "concurrentqueue.h"
+#include "pickle_logger.h"
 
 namespace rdma_util {
 
@@ -30,7 +30,8 @@ struct DeviceInfo {
     std::string device_name;
     __be64 guid;
 
-    DeviceInfo(const char* device_name, __be64 guid) : device_name(device_name), guid(guid) {}
+    template<typename T>
+    explicit DeviceInfo(T&& device_name, __be64 guid) : device_name(std::forward<T>(device_name)), guid(guid) {}
 };
 
 class Context {
@@ -42,20 +43,63 @@ class Context {
 private:
     ibv_context* inner;
 
+    Context(const char* device_name) noexcept(false) {
+        int num_devices = 0;
+        auto device_list = ibv_get_device_list(&num_devices);
+        if (device_list == nullptr) {
+            throw std::runtime_error("Failed to get device list");
+        }
+
+        for (int i = 0; device_list[i] != nullptr; i++) {
+            if (strcmp(ibv_get_device_name(device_list[i]), device_name) == 0) {
+                ibv_context* context = ibv_open_device(device_list[i]);
+                ibv_free_device_list(device_list);
+                if (context == nullptr) {
+                    throw std::runtime_error("Failed to open device");
+                } else {
+                    this->inner = context;
+                }
+                return;
+            }
+        }
+
+        ibv_free_device_list(device_list);
+        throw std::runtime_error("Device not found");
+    }
+
+public:
+    static std::unique_ptr<Context> create(const char* device_name) noexcept(false) {
+        DEBUG("rdma_util::Context::create() creating context using {}", device_name);
+        return std::unique_ptr<Context>(new Context(device_name));
+    }
+
+    static std::vector<DeviceInfo> get_device_infos() noexcept(false) {
+        int num_devices = 0;
+        auto device_list = ibv_get_device_list(&num_devices);
+        if (device_list == nullptr) {
+            throw std::runtime_error("Failed to get device list");
+        }
+        std::vector<DeviceInfo> devices;
+        devices.reserve(num_devices);
+        for (int i = 0; i < num_devices; i++) {
+            devices.emplace_back(ibv_get_device_name(device_list[i]), ibv_get_device_guid(device_list[i]));
+        }
+        ibv_free_device_list(device_list);
+        return devices;
+    }
+
     Context() = delete;
     Context(const Context&) = delete;
     Context& operator=(const Context&) = delete;
     Context(Context&&) = delete;
     Context& operator=(Context&&) = delete;
 
-    Context(const char* device_name) noexcept(false);
-
-public:
-    static std::unique_ptr<Context> create(const char* device_name) noexcept(false);
-
-    static std::vector<DeviceInfo> get_device_infos() noexcept(false);
-
-    ~Context();
+    ~Context() {
+        DEBUG("rdma_util::Context::~Context()");
+        if (this->inner) {
+            ibv_close_device(this->inner);
+        }
+    }
 };
 
 class ProtectionDomain {
@@ -68,21 +112,33 @@ private:
 
     std::shared_ptr<Context> context_;
 
+    ProtectionDomain(std::shared_ptr<Context> context) noexcept(false) : context_(std::move(context)) {
+        this->inner = ibv_alloc_pd(this->context_->inner);
+        if (this->inner == nullptr) {
+            throw std::runtime_error("Failed to allocate protection domain");
+        }
+    }
+
+public:
+    static std::unique_ptr<ProtectionDomain> create(std::shared_ptr<Context> context) noexcept(false) {
+        return std::unique_ptr<ProtectionDomain>(new ProtectionDomain(std::move(context)));
+    }
+
+    std::shared_ptr<Context> get_context() const {
+        return this->context_;
+    }
+
     ProtectionDomain() = delete;
     ProtectionDomain(const ProtectionDomain&) = delete;
     ProtectionDomain& operator=(const ProtectionDomain&) = delete;
     ProtectionDomain(ProtectionDomain&&) = delete;
     ProtectionDomain& operator=(ProtectionDomain&&) = delete;
 
-    ProtectionDomain(std::shared_ptr<Context> context) noexcept(false);
-
-public:
-    static std::unique_ptr<ProtectionDomain> create(std::shared_ptr<Context> context) noexcept(false);
-
-    ~ProtectionDomain();
-
-    inline std::shared_ptr<Context> get_context() const {
-        return this->context_;
+    ~ProtectionDomain() {
+        DEBUG("rdma_util::ProtectionDomain::~ProtectionDomain()");
+        if (this->inner) {
+            ibv_dealloc_pd(this->inner);
+        }
     }
 };
 
@@ -94,18 +150,30 @@ private:
 
     std::shared_ptr<Context> context_;
 
+    CompletionQueue(std::shared_ptr<Context> context, int cqe) noexcept(false) : context_(std::move(context)) {
+        this->inner = ibv_create_cq(this->context_->inner, cqe, nullptr, nullptr, 0);
+        if (this->inner == nullptr) {
+            throw std::runtime_error("Failed to create completion queue");
+        }
+    }
+
+public:
+    static std::shared_ptr<CompletionQueue> create(std::shared_ptr<Context> context, int cqe = 128) noexcept(false) {
+        return std::shared_ptr<CompletionQueue>(new CompletionQueue(std::move(context), cqe));
+    }
+
     CompletionQueue() = delete;
     CompletionQueue(const CompletionQueue&) = delete;
     CompletionQueue& operator=(const CompletionQueue&) = delete;
     CompletionQueue(CompletionQueue&&) = delete;
     CompletionQueue& operator=(CompletionQueue&&) = delete;
 
-    CompletionQueue(std::shared_ptr<Context> context, int cqe) noexcept(false);
-
-public:
-    static std::shared_ptr<CompletionQueue> create(std::shared_ptr<Context> context, int cqe = 128) noexcept(false);
-
-    ~CompletionQueue();
+    ~CompletionQueue() {
+        DEBUG("rdma_util::CompletionQueue::~CompletionQueue()");
+        if (this->inner) {
+            ibv_destroy_cq(this->inner);
+        }
+    }
 };
 
 class RcQueuePair {
@@ -121,12 +189,6 @@ private:
     std::shared_ptr<CompletionQueue> send_cq_;
     std::shared_ptr<CompletionQueue> recv_cq_;
 
-    RcQueuePair() = delete;
-    RcQueuePair(const RcQueuePair&) = delete;
-    RcQueuePair& operator=(const RcQueuePair&) = delete;
-    RcQueuePair(RcQueuePair&&) = delete;
-    RcQueuePair& operator=(RcQueuePair&&) = delete;
-
     RcQueuePair(
         std::shared_ptr<ProtectionDomain> pd,
         std::shared_ptr<CompletionQueue> send_cq,
@@ -134,22 +196,31 @@ private:
     ) noexcept(false);
 
 public:
+    RcQueuePair() = delete;
+    RcQueuePair(const RcQueuePair&) = delete;
+    RcQueuePair& operator=(const RcQueuePair&) = delete;
+    RcQueuePair(RcQueuePair&&) = delete;
+    RcQueuePair& operator=(RcQueuePair&&) = delete;
+
+    ~RcQueuePair();
+
     static std::unique_ptr<RcQueuePair> create(const char* device_name) noexcept(false);
+
     static std::unique_ptr<RcQueuePair> create(std::shared_ptr<Context> context) noexcept(false);
+
     static std::unique_ptr<RcQueuePair> create(std::shared_ptr<ProtectionDomain> pd) noexcept(false);
+
     static std::unique_ptr<RcQueuePair> create(
         std::shared_ptr<ProtectionDomain> pd,
         std::shared_ptr<CompletionQueue> send_cq,
         std::shared_ptr<CompletionQueue> recv_cq
     ) noexcept(false);
 
-    ~RcQueuePair();
-
-    inline std::shared_ptr<ProtectionDomain> get_pd() const {
+    std::shared_ptr<ProtectionDomain> get_pd() const {
         return this->pd_;
     }
 
-    inline std::shared_ptr<Context> get_context() const {
+    std::shared_ptr<Context> get_context() const {
         return this->context_;
     }
 
@@ -419,25 +490,43 @@ class MemoryRegion {
 private:
     ibv_mr* inner;
 
-    std::shared_ptr<ProtectionDomain> pd_;
     std::shared_ptr<Context> context_;
+    std::shared_ptr<ProtectionDomain> pd_;
 
     // This could be nullptr if the buffer is created with a raw pointer
     std::shared_ptr<void> inner_buffer_with_deleter_;
 
-    MemoryRegion() = delete;
-    MemoryRegion(const MemoryRegion&) = delete;
-    MemoryRegion& operator=(const MemoryRegion&) = delete;
-    MemoryRegion(MemoryRegion&&) = delete;
-    MemoryRegion& operator=(MemoryRegion&&) = delete;
+    MemoryRegion(std::shared_ptr<ProtectionDomain> pd, std::shared_ptr<void> buffer_with_deleter, uint64_t length) :
+        context_(pd->get_context()),
+        pd_(std::move(pd)),
+        inner_buffer_with_deleter_(std::move(buffer_with_deleter)) {
+        this->inner = ibv_reg_mr(
+            this->pd_->inner,
+            this->inner_buffer_with_deleter_.get(),
+            length,
+            ibv_access_flags::IBV_ACCESS_LOCAL_WRITE | ibv_access_flags::IBV_ACCESS_REMOTE_WRITE
+                | ibv_access_flags::IBV_ACCESS_REMOTE_READ
+        );
+        if (this->inner == nullptr) {
+            throw std::runtime_error("Failed to register memory region");
+        }
+    }
 
-    MemoryRegion(
-        std::shared_ptr<ProtectionDomain> pd,
-        std::shared_ptr<void> buffer_with_deleter,
-        uint64_t length
-    ) noexcept(false);
-
-    MemoryRegion(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false);
+    MemoryRegion(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) :
+        context_(pd->get_context()),
+        pd_(std::move(pd)),
+        inner_buffer_with_deleter_(nullptr) {
+        this->inner = ibv_reg_mr(
+            this->pd_->inner,
+            addr,
+            length,
+            ibv_access_flags::IBV_ACCESS_LOCAL_WRITE | ibv_access_flags::IBV_ACCESS_REMOTE_WRITE
+                | ibv_access_flags::IBV_ACCESS_REMOTE_READ
+        );
+        if (this->inner == nullptr) {
+            throw std::runtime_error("Failed to register memory region");
+        }
+    }
 
 public:
     /**
@@ -450,9 +539,9 @@ public:
      * @param length length of the buffer
      */
     static std::unique_ptr<MemoryRegion>
-    create(std::shared_ptr<ProtectionDomain> pd, std::shared_ptr<void> buffer_with_deleter, uint64_t length) noexcept(
-        false
-    );
+    create(std::shared_ptr<ProtectionDomain> pd, std::shared_ptr<void> buffer_with_deleter, uint64_t length) {
+        return std::unique_ptr<MemoryRegion>(new MemoryRegion(std::move(pd), std::move(buffer_with_deleter), length));
+    }
 
     /**
      * @brief Create a MemoryRegion object with a buffer that has a deleter
@@ -463,47 +552,41 @@ public:
      * @param addr address of the raw buffer
      * @param length length of the buffer
      */
-    static std::unique_ptr<MemoryRegion>
-    create(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false);
+    static std::unique_ptr<MemoryRegion> create(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) {
+        return std::unique_ptr<MemoryRegion>(new MemoryRegion(std::move(pd), addr, length));
+    }
 
-    ~MemoryRegion();
+    MemoryRegion() = delete;
+    MemoryRegion(const MemoryRegion&) = delete;
+    MemoryRegion& operator=(const MemoryRegion&) = delete;
+    MemoryRegion(MemoryRegion&&) = delete;
+    MemoryRegion& operator=(MemoryRegion&&) = delete;
 
-    inline uint32_t get_lkey() const {
+    ~MemoryRegion() {
+        DEBUG("rdma_util::MemoryRegion::~MemoryRegion()");
+        if (this->inner) {
+            ibv_dereg_mr(this->inner);
+        }
+    }
+
+    uint32_t get_lkey() const {
         return this->inner->lkey;
     }
 
-    inline uint32_t get_rkey() const {
+    uint32_t get_rkey() const {
         return this->inner->rkey;
     }
 
-    inline void* get_addr() const {
+    void* get_addr() const {
         return this->inner->addr;
     }
 
-    inline uint64_t get_length() const {
+    uint64_t get_length() const {
         return this->inner->length;
     }
 
-    inline std::shared_ptr<ProtectionDomain> get_pd() const {
+    std::shared_ptr<ProtectionDomain> get_pd() const {
         return this->pd_;
-    }
-};
-
-template<typename T>
-using Queue = moodycamel::ConcurrentQueue<T>;
-
-struct Ticket {
-    uint32_t stream_id;
-    uint32_t length;
-    uint64_t addr;
-    uint32_t key;
-    uint32_t padding_;
-
-    inline std::string to_string() const {
-        std::stringstream ss;
-        ss << "stream_id: " << stream_id << std::hex << std::uppercase << ", length: " << length << ", addr: " << addr
-           << ", key: " << key << ", padding: " << padding_;
-        return ss.str();
     }
 };
 

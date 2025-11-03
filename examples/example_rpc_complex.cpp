@@ -36,8 +36,6 @@ struct rpc_data_t {
         uint64_t send_recv_size;
     } data;
 
-    rpc_data_t() = default;
-
     std::vector<char> into_bytes() const {
         std::vector<char> buffer(sizeof(rpc_data_t));
         std::memcpy(buffer.data(), this, sizeof(rpc_data_t));
@@ -121,7 +119,7 @@ public:
                 auto handle =
                     recver->recv(0, reinterpret_cast<uint64_t>(this->mr_->get_addr()), size, this->mr_->get_lkey());
                 std::thread([handle, recver]() {
-                    while (!handle.is_finished()) {
+                    while (!handle->is_notified()) {
                         recver->poll();
                         std::this_thread::yield();
                     }
@@ -151,11 +149,13 @@ void client(const char* ip, int port) {
     );
 
     // Call rpc to get remote handshake data
-    auto response = rpc_data_t::from_bytes(rpc_core::rpc_call(
-        ip,
-        port,
-        rpc_data_t {rpc_type_t::RPC_TYPE_HANDSHAKE, {.handshake_data = qp->get_handshake_data(3)}}.into_bytes()
-    ));
+    auto response = rpc_data_t::from_bytes(
+        rpc_core::rpc_call(
+            ip,
+            port,
+            rpc_data_t {rpc_type_t::RPC_TYPE_HANDSHAKE, {.handshake_data = qp->get_handshake_data(3)}}.into_bytes()
+        )
+    );
     assert(response.type == rpc_type_t::RPC_TYPE_HANDSHAKE);
 
     // Bring up the connection
@@ -164,13 +164,15 @@ void client(const char* ip, int port) {
     auto sender = pickle::PickleSender::create(std::move(qp));
     // Send
     auto handle = sender->send(0, reinterpret_cast<uint64_t>(mr->get_addr()), kDataBufferSize, mr->get_lkey());
-    response = rpc_data_t::from_bytes(rpc_core::rpc_call(
-        "127.0.0.1",
-        port,
-        rpc_data_t {rpc_type_t::RPC_TYPE_SEND_RECV, {.send_recv_size = kDataBufferSize}}.into_bytes()
-    ));
+    response = rpc_data_t::from_bytes(
+        rpc_core::rpc_call(
+            "127.0.0.1",
+            port,
+            rpc_data_t {rpc_type_t::RPC_TYPE_SEND_RECV, {.send_recv_size = kDataBufferSize}}.into_bytes()
+        )
+    );
     assert(response.type == rpc_type_t::RPC_TYPE_SUCCESS);
-    while (!handle.is_finished()) {
+    while (!handle->is_notified()) {
         sender->poll();
     }
 }

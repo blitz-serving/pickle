@@ -21,16 +21,16 @@ int main() {
 
     INFO("Base addr {}", fmt::ptr(mr->get_addr()));
 
-    std::shared_ptr<std::atomic<bool>> flag;
+    std::shared_ptr<Event> event;
 
     for (int i = 0; i < 16; ++i) {
-        flag = std::make_shared<std::atomic<bool>>(false);
+        event = Event::create();
         auto addr = uint64_t(mr->get_addr()) + i * sizeof(uint64_t);
         INFO("Flush addr {}", fmt::ptr((void*)(addr)));
-        flusher->append(mr->get_rkey(), addr, flag);
+        flusher->append(mr->get_rkey(), addr, event);
     }
 
-    while (!flag->load()) {
+    while (!event->is_notified()) {
         flusher->poll();
     }
 }

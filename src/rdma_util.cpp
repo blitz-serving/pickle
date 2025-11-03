@@ -14,95 +14,6 @@
 
 namespace rdma_util {
 
-Context::Context(const char* device_name) noexcept(false) {
-    int num_devices = 0;
-    auto device_list = ibv_get_device_list(&num_devices);
-    if (device_list == nullptr) {
-        throw std::runtime_error("Failed to get device list");
-    }
-
-    for (int i = 0; device_list[i] != nullptr; i++) {
-        if (strcmp(ibv_get_device_name(device_list[i]), device_name) == 0) {
-            ibv_context* context = ibv_open_device(device_list[i]);
-            ibv_free_device_list(device_list);
-            if (context == nullptr) {
-                throw std::runtime_error("Failed to open device");
-            } else {
-                this->inner = context;
-            }
-            return;
-        }
-    }
-
-    ibv_free_device_list(device_list);
-    throw std::runtime_error("Device not found");
-}
-
-Context::~Context() {
-    DEBUG("rdma_util::Context::~Context()");
-    if (this->inner) {
-        ibv_close_device(this->inner);
-    }
-}
-
-std::vector<DeviceInfo> Context::get_device_infos() noexcept(false) {
-    int num_devices = 0;
-    auto device_list = ibv_get_device_list(&num_devices);
-    if (device_list == nullptr) {
-        throw std::runtime_error("Failed to get device list");
-    }
-    std::vector<DeviceInfo> devices;
-    devices.reserve(num_devices);
-    for (int i = 0; i < num_devices; i++) {
-        devices.emplace_back(ibv_get_device_name(device_list[i]), ibv_get_device_guid(device_list[i]));
-    }
-    ibv_free_device_list(device_list);
-    return devices;
-}
-
-std::unique_ptr<Context> Context::create(const char* device_name) noexcept(false) {
-    DEBUG("rdma_util::Context::create() creating context using {}", device_name);
-    return std::unique_ptr<Context>(new Context(device_name));
-}
-
-ProtectionDomain::ProtectionDomain(std::shared_ptr<Context> context) noexcept(false) {
-    this->context_ = context;
-    this->inner = ibv_alloc_pd(context->inner);
-    if (this->inner == nullptr) {
-        throw std::runtime_error("Failed to allocate protection domain");
-    }
-}
-
-std::unique_ptr<ProtectionDomain> ProtectionDomain::create(std::shared_ptr<Context> context) noexcept(false) {
-    return std::unique_ptr<ProtectionDomain>(new ProtectionDomain(context));
-}
-
-ProtectionDomain::~ProtectionDomain() {
-    DEBUG("rdma_util::ProtectionDomain::~ProtectionDomain()");
-    if (this->inner) {
-        ibv_dealloc_pd(this->inner);
-    }
-}
-
-CompletionQueue::CompletionQueue(std::shared_ptr<Context> context, int cqe) noexcept(false) {
-    this->context_ = context;
-    this->inner = ibv_create_cq(context->inner, cqe, nullptr, nullptr, 0);
-    if (this->inner == nullptr) {
-        throw std::runtime_error("Failed to create completion queue");
-    }
-}
-
-CompletionQueue::~CompletionQueue() {
-    DEBUG("rdma_util::CompletionQueue::~CompletionQueue()");
-    if (this->inner) {
-        ibv_destroy_cq(this->inner);
-    }
-}
-
-std::shared_ptr<CompletionQueue> CompletionQueue::create(std::shared_ptr<Context> context, int cqe) {
-    return std::shared_ptr<CompletionQueue>(new CompletionQueue(context, cqe));
-}
-
 RcQueuePair::RcQueuePair(
     std::shared_ptr<ProtectionDomain> pd,
     std::shared_ptr<CompletionQueue> send_cq,
@@ -131,19 +42,23 @@ std::unique_ptr<RcQueuePair> RcQueuePair::create(const char* device_name) noexce
     std::shared_ptr<Context> context = Context::create(device_name);
     auto send_cq = CompletionQueue::create(context);
     auto recv_cq = CompletionQueue::create(context);
-    return std::unique_ptr<RcQueuePair>(new RcQueuePair(ProtectionDomain::create(context), send_cq, recv_cq));
+    return std::unique_ptr<RcQueuePair>(
+        new RcQueuePair(ProtectionDomain::create(std::move(context)), std::move(send_cq), std::move(recv_cq))
+    );
 }
 
 std::unique_ptr<RcQueuePair> RcQueuePair::create(std::shared_ptr<Context> context) noexcept(false) {
     auto send_cq = CompletionQueue::create(context);
     auto recv_cq = CompletionQueue::create(context);
-    return std::unique_ptr<RcQueuePair>(new RcQueuePair(ProtectionDomain::create(context), send_cq, recv_cq));
+    return std::unique_ptr<RcQueuePair>(
+        new RcQueuePair(ProtectionDomain::create(std::move(context)), std::move(send_cq), std::move(recv_cq))
+    );
 }
 
 std::unique_ptr<RcQueuePair> RcQueuePair::create(std::shared_ptr<ProtectionDomain> pd) noexcept(false) {
     auto send_cq = CompletionQueue::create(pd->get_context());
     auto recv_cq = CompletionQueue::create(pd->get_context());
-    return std::unique_ptr<RcQueuePair>(new RcQueuePair(pd, send_cq, recv_cq));
+    return std::unique_ptr<RcQueuePair>(new RcQueuePair(std::move(pd), std::move(send_cq), std::move(recv_cq)));
 }
 
 std::unique_ptr<RcQueuePair> RcQueuePair::create(
@@ -151,7 +66,7 @@ std::unique_ptr<RcQueuePair> RcQueuePair::create(
     std::shared_ptr<CompletionQueue> send_cq,
     std::shared_ptr<CompletionQueue> recv_cq
 ) noexcept(false) {
-    return std::unique_ptr<RcQueuePair>(new RcQueuePair(pd, send_cq, recv_cq));
+    return std::unique_ptr<RcQueuePair>(new RcQueuePair(std::move(pd), std::move(send_cq), std::move(recv_cq)));
 }
 
 RcQueuePair::~RcQueuePair() {
@@ -192,11 +107,7 @@ HandshakeData RcQueuePair::get_handshake_data(uint32_t gid_index) noexcept(false
         throw std::runtime_error(buf);
     }
 
-    HandshakeData handshake_data {};
-    handshake_data.gid = gid;
-    handshake_data.lid = attr.lid;
-    handshake_data.qp_num = this->inner->qp_num;
-    return handshake_data;
+    return {gid, attr.lid, this->inner->qp_num};
 }
 
 void RcQueuePair::bring_up(const HandshakeData& handshake_data, uint32_t gid_index, ibv_rate rate) noexcept(false) {
@@ -598,64 +509,6 @@ int RcQueuePair::poll_recv_cq_once(const int max_num_wcs, std::vector<ibv_wc>& p
         polled_wcs.resize(ret);
     }
     return ret;
-}
-
-MemoryRegion::MemoryRegion(
-    std::shared_ptr<ProtectionDomain> pd,
-    std::shared_ptr<void> buffer_with_deleter,
-    uint64_t length
-) noexcept(false) {
-    auto addr = buffer_with_deleter.get();
-
-    this->inner_buffer_with_deleter_ = buffer_with_deleter;
-    this->pd_ = pd;
-    this->context_ = pd->context_;
-    this->inner = ibv_reg_mr(
-        pd->inner,
-        addr,
-        length,
-        ibv_access_flags::IBV_ACCESS_LOCAL_WRITE | ibv_access_flags::IBV_ACCESS_REMOTE_WRITE
-            | ibv_access_flags::IBV_ACCESS_REMOTE_READ
-    );
-    if (this->inner == nullptr) {
-        throw std::runtime_error("Failed to register memory region");
-    }
-}
-
-MemoryRegion::MemoryRegion(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false) {
-    this->inner_buffer_with_deleter_ = nullptr;
-    this->pd_ = pd;
-    this->context_ = pd->context_;
-    this->inner = ibv_reg_mr(
-        pd->inner,
-        addr,
-        length,
-        ibv_access_flags::IBV_ACCESS_LOCAL_WRITE | ibv_access_flags::IBV_ACCESS_REMOTE_WRITE
-            | ibv_access_flags::IBV_ACCESS_REMOTE_READ
-    );
-    if (this->inner == nullptr) {
-        throw std::runtime_error("Failed to register memory region");
-    }
-}
-
-MemoryRegion::~MemoryRegion() {
-    DEBUG("rdma_util::MemoryRegion::~MemoryRegion()");
-    if (this->inner) {
-        ibv_dereg_mr(this->inner);
-    }
-}
-
-std::unique_ptr<MemoryRegion> MemoryRegion::create(
-    std::shared_ptr<ProtectionDomain> pd,
-    std::shared_ptr<void> buffer_with_deleter,
-    uint64_t length
-) noexcept(false) {
-    return std::unique_ptr<MemoryRegion>(new MemoryRegion(pd, buffer_with_deleter, length));
-}
-
-std::unique_ptr<MemoryRegion>
-MemoryRegion::create(std::shared_ptr<ProtectionDomain> pd, void* addr, uint64_t length) noexcept(false) {
-    return std::unique_ptr<MemoryRegion>(new MemoryRegion(pd, addr, length));
 }
 
 }  // namespace rdma_util

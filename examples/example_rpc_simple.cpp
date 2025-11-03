@@ -6,8 +6,6 @@ struct rpc_request_t {
     int64_t a;
     int64_t b;
 
-    rpc_request_t() = default;
-
     std::vector<char> into_bytes() const {
         std::vector<char> data(sizeof(rpc_request_t));
         std::memcpy(data.data(), this, sizeof(rpc_request_t));
@@ -23,8 +21,6 @@ struct rpc_request_t {
 
 struct rpc_response_t {
     int64_t result;
-
-    rpc_response_t() = default;
 
     std::vector<char> to_bytes() const {
         std::vector<char> data(sizeof(rpc_response_t));
