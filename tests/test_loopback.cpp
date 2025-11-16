@@ -11,8 +11,9 @@
 
 static uint8_t buffer[1024];
 
+const char* dev_name = "ib7s400p0";
+
 TEST(OpenDevice, CreateQP) {
-    const char* dev_name = "mlx5_0";
     std::shared_ptr<rdma_util::Context> context = rdma_util::Context::create(dev_name);
     std::shared_ptr<rdma_util::RcQueuePair> qp = rdma_util::RcQueuePair::create(context);
     qp->bring_up(qp->get_handshake_data());
@@ -20,7 +21,6 @@ TEST(OpenDevice, CreateQP) {
 }
 
 TEST(OpenDevice, SendRecv) {
-    const char* dev_name = "mlx5_0";
     std::shared_ptr<rdma_util::Context> context = rdma_util::Context::create(dev_name);
     std::shared_ptr<rdma_util::RcQueuePair> qp = rdma_util::RcQueuePair::create(context);
     qp->bring_up(qp->get_handshake_data());
@@ -43,7 +43,6 @@ TEST(OpenDevice, SendRecv) {
 }
 
 TEST(OpenDevice, SendRecvError) {
-    const char* dev_name = "mlx5_0";
     std::shared_ptr<rdma_util::Context> context = rdma_util::Context::create(dev_name);
     std::shared_ptr<rdma_util::RcQueuePair> qp = rdma_util::RcQueuePair::create(context);
     qp->bring_up(qp->get_handshake_data());

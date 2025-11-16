@@ -14,8 +14,9 @@
 
 #include "rdma_util.h"
 
-constexpr const char* kDevice1 = "mlx5_0";
-constexpr const char* kDevice2 = "mlx5_1";
+constexpr const char* kDevice1 = "ib7s400p0";
+constexpr const char* kDevice2 = "ib7s400p1";
+constexpr uint32_t kGidIndex = 0;
 constexpr int32_t kGPU1 = 0;
 constexpr int32_t kGPU2 = 1;
 constexpr uint64_t kChunkSize = 64ull * 1024;
@@ -24,7 +25,6 @@ constexpr uint64_t kSlotNum = kBufferSize / kChunkSize;
 constexpr uint64_t kOutstandingReads = 16;
 constexpr uint64_t kReadCount = 64ull * 1024 * 1024 * 1024 / kChunkSize;
 constexpr uint64_t kThreadNum = 8;
-constexpr int32_t kGidIndex = 3;
 
 static std::atomic<uint64_t> g_bytes_transferred(0);
 

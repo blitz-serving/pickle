@@ -15,6 +15,10 @@ constexpr uint64_t kBufferSize = 2 * kChunkSize * kSlotNum;
 constexpr uint64_t kSendRecvCount = 128ull * 1024 * 1024 * 1024 / kChunkSize;
 constexpr uint64_t kThreadNum = 1;
 
+constexpr const char* kRNIC1 = "ib7s400p0";
+constexpr const char* kRNIC2 = "ib7s400p1";
+constexpr uint32_t kGidIndex = 0;
+
 static std::atomic<uint64_t> g_bytes_transferred(0);
 
 int reporter_thread();
@@ -54,10 +58,6 @@ void free_buffer(void* p) {
 }
 
 int main() {
-    constexpr const char* kRNIC1 = "mlx5_0";
-    constexpr const char* kRNIC2 = "mlx5_1";
-    constexpr uint32_t kGidIndex = 3;
-
     auto send_buffer = std::shared_ptr<void>(malloc_buffer(kBufferSize), free_buffer);
     auto recv_buffer = std::shared_ptr<void>(malloc_buffer(kBufferSize), free_buffer);
 

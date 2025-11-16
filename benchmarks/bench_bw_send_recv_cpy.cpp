@@ -1,4 +1,5 @@
 #include <cuda_runtime.h>
+#include <sys/types.h>
 
 #include <atomic>
 #include <cstdint>
@@ -14,10 +15,11 @@ constexpr uint64_t kBufferSize = 75ull * 1024 * 1024 * 1024;
 constexpr uint64_t kSendRecvCount = kBufferSize / kChunkSize - 1;
 constexpr uint64_t kThreadNum = 1;
 
-constexpr const char* kRNIC1 = "mlx5_1";
-constexpr const char* kRNIC2 = "mlx5_5";
-constexpr uint32_t kGPU1 = 2;
-constexpr uint32_t kGPU2 = 7;
+constexpr const char* kRNIC1 = "ib7s400p0";
+constexpr const char* kRNIC2 = "ib7s400p1";
+constexpr uint32_t kGPU1 = 0;
+constexpr uint32_t kGPU2 = 1;
+constexpr uint32_t kGidIndex = 0;
 
 static std::atomic<uint64_t> g_bytes_transferred(0);
 
@@ -53,8 +55,8 @@ int main() {
         std::shared_ptr<rdma_util::RcQueuePair> qp1 = rdma_util::RcQueuePair::create(pd1);
         std::shared_ptr<rdma_util::RcQueuePair> qp2 = rdma_util::RcQueuePair::create(pd2);
 
-        qp1->bring_up(qp2->get_handshake_data(3), 3);
-        qp2->bring_up(qp1->get_handshake_data(3), 3);
+        qp1->bring_up(qp2->get_handshake_data(kGidIndex), kGidIndex);
+        qp2->bring_up(qp1->get_handshake_data(kGidIndex), kGidIndex);
 
         auto t1 = std::thread(sender_thread, qp1, mr1);
         auto t2 = std::thread(recver_thread, qp2, mr2);

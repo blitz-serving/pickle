@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20 FATAL_ERROR)
 project(NanoGDR LANGUAGES CUDA CXX)
 
-set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -Wno-unused-parameter -Wno-unused-function")
@@ -10,6 +10,11 @@ option(BUILD_TESTS "Build tests" ON)
 option(BUILD_EXAMPLES "Build examples" ON)
 option(BUILD_BENCHMARKS "Build benchmarks" ON)
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
+
+option(ENABLE_BUSY_WAIT "Enable busy-wait" OFF)
+if(ENABLE_BUSY_WAIT)
+    add_compile_definitions(BUSY_WAIT)
+endif()
 
 # Add third-party libraries
 if(NOT TARGET fmt)

@@ -13,14 +13,14 @@
 #include "pickle.h"
 #include "pickle_logger.h"
 
-constexpr const char* kRNIC1 = "mlx5_0";
-constexpr const char* kRNIC2 = "mlx5_1";
+constexpr const char* kDevice1 = "ib7s400p0";
+constexpr const char* kDevice2 = "ib7s400p1";
+constexpr uint32_t kGidIndex = 0;
 constexpr int32_t kGPU1 = 0;
 constexpr int32_t kGPU2 = 1;
-constexpr uint32_t kGidIndex = 3;
 constexpr uint64_t kPacketSize = 1024;
-constexpr uint64_t kDataBufferSize = 1ull * 16 * 1024 * 1024 * 1024;
-constexpr uint32_t kChunkSize = 1ull * 1024 * 1024;
+constexpr uint64_t kDataBufferSize = 1ull * 4 * 1024 * 1024 * 1024;
+constexpr uint32_t kChunkSize = 1ull * 2 * 1024 * 1024 * 1024;
 constexpr ibv_rate kRate = ibv_rate::IBV_RATE_MAX;
 
 static std::atomic<uint64_t> bytes_transferred(0);
@@ -143,8 +143,8 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    auto qp1 = rdma_util::RcQueuePair::create(kRNIC1);
-    auto qp2 = rdma_util::RcQueuePair::create(kRNIC2);
+    auto qp1 = rdma_util::RcQueuePair::create(kDevice1);
+    auto qp2 = rdma_util::RcQueuePair::create(kDevice2);
 
     qp1->bring_up(qp2->get_handshake_data(kGidIndex), kGidIndex, kRate);
     qp2->bring_up(qp1->get_handshake_data(kGidIndex), kGidIndex, kRate);
@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
     std::shared_ptr flusher = pickle::Flusher::create(qp2->get_pd());
 
     auto sender = pickle::PickleSender::create(std::move(qp1), kPacketSize);
-    auto recver = pickle::PickleRecver::create(std::move(qp2), flusher);
+    auto recver = pickle::PickleRecver::create(std::move(qp2), nullptr);
 
     std::thread thread_reporter(reporter_thread);
     std::thread thread_sender(sender_thread, sender, data_mr1, 20250625);
