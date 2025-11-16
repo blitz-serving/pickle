@@ -1,6 +1,9 @@
+#include <fmt/core.h>
+
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
+#include <source_location>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -42,25 +45,44 @@ struct Ok<void> {
 // Class Template Argument Deduction since cpp17
 Ok() -> Ok<void>;
 
+template<typename Derived>
+struct ResultBase {
+    const Derived& self() const noexcept {
+        return static_cast<const Derived&>(*this);
+    }
+
+    void ensure_ok(const std::source_location& loc) const noexcept {
+        if (!self().is_ok()) {
+            ::fmt::print(
+                stderr,
+                "{}:{}:{}: Tried to unwrap on an Err value\n",
+                loc.file_name(),
+                loc.line(),
+                loc.column()
+            );
+            std::abort();
+        }
+    }
+
+    void ensure_err(const std::source_location& loc) const noexcept {
+        if (!self().is_err()) {
+            ::fmt::print(
+                stderr,
+                "{}:{}:{}: Tried to unwrap_err on an Ok value\n",
+                loc.file_name(),
+                loc.line(),
+                loc.column()
+            );
+            std::abort();
+        }
+    }
+};
+
 template<typename T, typename E>
     requires(!std::is_void_v<E>)
-struct Result {
+struct Result: ResultBase<Result<T, E>> {
 private:
     std::variant<T, E> storage_;
-
-    inline void ensure_ok() const noexcept {
-        if (!is_ok()) {
-            std::fprintf(stderr, "Called unwrap on an Err value\n");
-            std::abort();
-        }
-    }
-
-    inline void ensure_err() const noexcept {
-        if (!is_err()) {
-            std::fprintf(stderr, "Called unwrap_err on an Ok value\n");
-            std::abort();
-        }
-    }
 
 public:
     Result(const Ok<T>& ok) noexcept(std::is_nothrow_copy_constructible_v<T>)
@@ -87,47 +109,33 @@ public:
         return std::holds_alternative<E>(storage_);
     }
 
-    T& unwrap() & noexcept {
-        ensure_ok();
+    T& unwrap(const std::source_location& loc = std::source_location::current()) & noexcept {
+        this->ensure_ok(loc);
         return std::get<T>(storage_);
     }
 
-    T&& unwrap() && noexcept {
-        ensure_ok();
+    T&& unwrap(const std::source_location& loc = std::source_location::current()) && noexcept {
+        this->ensure_ok(loc);
         return std::move(std::get<T>(storage_));
     }
 
-    E& unwrap_err() & noexcept {
-        ensure_err();
+    E& unwrap_err(const std::source_location& loc = std::source_location::current()) & noexcept {
+        this->ensure_err(loc);
         return std::get<E>(storage_);
     }
 
-    E&& unwrap_err() && noexcept {
-        ensure_err();
+    E&& unwrap_err(const std::source_location& loc = std::source_location::current()) && noexcept {
+        this->ensure_err(loc);
         return std::move(std::get<E>(storage_));
     }
 };
 
 template<typename T>
     requires(!std::is_void_v<T>)
-struct Result<T, T> {
+struct Result<T, T>: ResultBase<Result<T, T>> {
 private:
     bool ok_;
     T storage_;
-
-    inline void ensure_ok() const noexcept {
-        if (!is_ok()) {
-            std::fprintf(stderr, "Called unwrap on an Err value\n");
-            std::abort();
-        }
-    }
-
-    inline void ensure_err() const noexcept {
-        if (!is_err()) {
-            std::fprintf(stderr, "Called unwrap_err on an Ok value\n");
-            std::abort();
-        }
-    }
 
 public:
     Result(const Ok<T>& ok) noexcept(std::is_nothrow_copy_constructible_v<T>)
@@ -154,46 +162,32 @@ public:
         return !ok_;
     }
 
-    T& unwrap() & noexcept {
-        ensure_ok();
+    T& unwrap(const std::source_location& loc = std::source_location::current()) & noexcept {
+        this->ensure_ok(loc);
         return storage_;
     }
 
-    T&& unwrap() && noexcept {
-        ensure_ok();
+    T&& unwrap(const std::source_location& loc = std::source_location::current()) && noexcept {
+        this->ensure_ok(loc);
         return std::move(storage_);
     }
 
-    T& unwrap_err() & noexcept {
-        ensure_err();
+    T& unwrap_err(const std::source_location& loc = std::source_location::current()) & noexcept {
+        this->ensure_err(loc);
         return storage_;
     }
 
-    T&& unwrap_err() && noexcept {
-        ensure_err();
+    T&& unwrap_err(const std::source_location& loc = std::source_location::current()) && noexcept {
+        this->ensure_err(loc);
         return std::move(storage_);
     }
 };
 
 template<typename E>
     requires(!std::is_void_v<E>)
-struct Result<void, E> {
+struct Result<void, E>: ResultBase<Result<void, E>> {
 private:
     std::optional<E> error_;
-
-    inline void ensure_ok() const noexcept {
-        if (is_err()) {
-            std::fprintf(stderr, "Called unwrap on an Err value\n");
-            std::abort();
-        }
-    }
-
-    inline void ensure_err() const noexcept {
-        if (is_ok()) {
-            std::fprintf(stderr, "Called unwrap_err on an Ok value\n");
-            std::abort();
-        }
-    }
 
 public:
     Result(Ok<void>) noexcept : error_(std::nullopt) {}
@@ -214,17 +208,17 @@ public:
         return error_.has_value();
     }
 
-    void unwrap() const noexcept {
-        ensure_ok();
+    void unwrap(const std::source_location& loc = std::source_location::current()) const noexcept {
+        this->ensure_ok(loc);
     }
 
-    E& unwrap_err() & noexcept {
-        ensure_err();
+    E& unwrap_err(const std::source_location& loc = std::source_location::current()) & noexcept {
+        this->ensure_err(loc);
         return *error_;
     }
 
-    E&& unwrap_err() && noexcept {
-        ensure_err();
+    E&& unwrap_err(const std::source_location& loc = std::source_location::current()) && noexcept {
+        this->ensure_err(loc);
         return std::move(*error_);
     }
 };
