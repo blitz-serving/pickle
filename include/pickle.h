@@ -1,5 +1,4 @@
-#ifndef _PICKLE_H_
-#define _PICKLE_H_
+#pragma once
 
 #include <infiniband/verbs.h>
 #include <x86intrin.h>
@@ -217,5 +216,3 @@ public:
 };
 
 }  // namespace pickle
-
-#endif  // _PICKLE_H_

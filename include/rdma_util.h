@@ -1,5 +1,4 @@
-#ifndef _RDMA_UTIL_H_
-#define _RDMA_UTIL_H_
+#pragma once
 
 #include <infiniband/verbs.h>
 #include <linux/types.h>
@@ -591,5 +590,3 @@ public:
 };
 
 }  // namespace rdma_util
-
-#endif  // _RDMA_UTIL_H_

@@ -1,4 +1,5 @@
 #include <cassert>
+#include <ostream>
 #include <string>
 
 #include "result.h"
@@ -145,6 +146,16 @@ void test_ok_void_deduction() {
 // Your current design lacks const overloads for unwrap.
 // If needed, add const & / const && overloads.
 
+struct MyError {
+    std::string message;
+
+    MyError(std::string msg) : message(std::move(msg)) {}
+};
+
+std::ostream& operator<<(std::ostream& os, const MyError& err) {
+    return os << "MyError: " << err.message;
+}
+
 // Main
 int main() {
     test_basic_result();
@@ -154,7 +165,7 @@ int main() {
     test_noexcept();
     test_try_macro();
     test_ok_void_deduction();
-
+    result::Result<void, MyError>(result::Err(MyError("custom error"))).unwrap();
     std::printf("All tests passed!\n");
     return 0;
 }

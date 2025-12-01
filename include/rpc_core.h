@@ -1,5 +1,4 @@
-#ifndef _RPC_CORE_H_
-#define _RPC_CORE_H_
+#pragma once
 
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -212,5 +211,3 @@ public:
 };
 
 }  // namespace rpc_core
-
-#endif

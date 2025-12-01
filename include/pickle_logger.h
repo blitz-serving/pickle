@@ -1,5 +1,4 @@
-#ifndef _LOGGER_H_
-#define _LOGGER_H_
+#pragma once
 
 #include <fmt/chrono.h>
 #include <fmt/core.h>
@@ -129,5 +128,3 @@ static inline auto _pickle_format_(T&& f, Args&&... args)
             );                                                                                                  \
         }                                                                                                       \
     } while (0)
-
-#endif  // _LOGGER_H_

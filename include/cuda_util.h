@@ -1,5 +1,4 @@
-#ifndef _CUDA_UTIL_H_
-#define _CUDA_UTIL_H_
+#pragma once
 
 #include <cuda_runtime.h>
 
@@ -27,5 +26,3 @@ inline void free_gpu_buffer(void* d_ptr) noexcept {
     }
 }
 }  // namespace cuda_util
-
-#endif  // _CUDA_UTIL_H_
