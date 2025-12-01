@@ -81,14 +81,14 @@ void reporter_thread() {
 void sender_thread(
     std::shared_ptr<pickle::PickleSender> sender,
     std::shared_ptr<rdma_util::MemoryRegion> data_mr,
-    uint32_t stream_id
+    uint32_t unique_id
 ) {
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t lkey = data_mr->get_lkey();
 
     std::vector<std::shared_ptr<pickle::Event>> handles;
     for (uint64_t i = 0; i < kDataBufferSize / kChunkSize; ++i) {
-        handles.push_back(sender->send(stream_id, base_addr + i * kChunkSize, kChunkSize, lkey));
+        handles.push_back(sender->send(unique_id, base_addr + i * kChunkSize, kChunkSize, lkey));
     }
 
     for (const auto& handle : handles) {
@@ -105,14 +105,14 @@ void sender_thread(
 void recver_thread(
     std::shared_ptr<pickle::PickleRecver> recver,
     std::shared_ptr<rdma_util::MemoryRegion> data_mr,
-    uint32_t stream_id
+    uint32_t unique_id
 ) {
     const uint64_t base_addr = uint64_t(data_mr->get_addr());
     const uint32_t rkey = data_mr->get_rkey();
 
     std::vector<std::shared_ptr<pickle::Event>> handles;
     for (uint64_t i = 0; i < kDataBufferSize / kChunkSize; ++i) {
-        handles.push_back(recver->recv(stream_id, base_addr + i * kChunkSize, kChunkSize, rkey));
+        handles.push_back(recver->recv(unique_id, base_addr + i * kChunkSize, kChunkSize, rkey));
     }
 
     for (const auto& handle : handles) {

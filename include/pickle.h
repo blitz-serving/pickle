@@ -30,13 +30,13 @@ template<typename T>
 using Queue = moodycamel::ConcurrentQueue<T>;
 
 struct alignas(32) Ticket {
-    uint32_t stream_id;
+    uint32_t unique_id;
     uint32_t length;
     uint32_t key;
     uint64_t addr;
 
     std::string to_string() const {
-        return std::format("{{ stream_id: {}, key: {}, length: 0x{:x}, addr: 0x{:x} }}", stream_id, key, length, addr);
+        return std::format("{{ unique_id: {}, key: {}, length: 0x{:x}, addr: 0x{:x} }}", unique_id, key, length, addr);
     }
 };
 
@@ -121,7 +121,7 @@ public:
     static std::shared_ptr<PickleSender>
     create(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size = 256 * 1024) noexcept(false);
 
-    [[nodiscard]] std::shared_ptr<Event> send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey);
+    [[nodiscard]] std::shared_ptr<Event> send(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t lkey);
 
     /**
      * @brief The executor of the PickleSender.
@@ -206,7 +206,7 @@ public:
     static std::shared_ptr<PickleRecver>
     create(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<Flusher> flusher = nullptr) noexcept(false);
 
-    [[nodiscard]] std::shared_ptr<Event> recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey);
+    [[nodiscard]] std::shared_ptr<Event> recv(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t rkey);
 
     /**
      * @brief The executor of the PickleRecver

@@ -103,7 +103,7 @@ int main() {
     atomic_uint64_t counter(0);
 
     auto rand_send = [=, &counter](shared_ptr<pickle::PickleSender> sender, shared_ptr<pickle::MemoryRegion> mr) {
-        int stream_id = 0;
+        int unique_id = 0;
         vector<shared_ptr<pickle::Event>> events;
         auto [base_addr, num_chunks] = count_aligned_chunks(mr->get_addr(), mr->get_length(), chunk_size);
         std::mt19937 rng(std::hash<std::thread::id> {}(std::this_thread::get_id()));
@@ -111,7 +111,7 @@ int main() {
         auto lkey = mr->get_lkey();
 
         for (int i = 0; i < ring_buffer_cap; i++) {
-            events.push_back(sender->send(stream_id, uint64_t(base_addr) + dist(rng) * chunk_size, chunk_size, lkey));
+            events.push_back(sender->send(unique_id, uint64_t(base_addr) + dist(rng) * chunk_size, chunk_size, lkey));
         }
 
         int i = 0;
@@ -121,19 +121,19 @@ int main() {
                 continue;
             }
             counter.fetch_add(chunk_size);
-            events[i] = sender->send(stream_id, uint64_t(base_addr) + dist(rng) * chunk_size, chunk_size, lkey);
+            events[i] = sender->send(unique_id, uint64_t(base_addr) + dist(rng) * chunk_size, chunk_size, lkey);
             i = (i + 1) % ring_buffer_cap;
         }
     };
 
     auto rand_recv = [=](shared_ptr<pickle::PickleRecver> recver, shared_ptr<pickle::MemoryRegion> mr) {
-        int stream_id = 0;
+        int unique_id = 0;
         vector<shared_ptr<pickle::Event>> events;
         auto [base_addr, num_chunks] = count_aligned_chunks(mr->get_addr(), mr->get_length(), chunk_size);
         auto rkey = mr->get_rkey();
 
         for (int i = 0; i < ring_buffer_cap; i++) {
-            events.push_back(recver->recv(stream_id, uint64_t(base_addr) + i * chunk_size, chunk_size, rkey));
+            events.push_back(recver->recv(unique_id, uint64_t(base_addr) + i * chunk_size, chunk_size, rkey));
         }
 
         int i = 0;
@@ -143,7 +143,7 @@ int main() {
                 continue;
             }
             events[i]->wait();
-            events[i] = recver->recv(stream_id, uint64_t(base_addr) + i * chunk_size, chunk_size, rkey);
+            events[i] = recver->recv(unique_id, uint64_t(base_addr) + i * chunk_size, chunk_size, rkey);
             i = (i + 1) % ring_buffer_cap;
         }
     };

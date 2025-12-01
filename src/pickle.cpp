@@ -20,7 +20,7 @@ union wrid_t {
         uint16_t padding_ : 15;
         bool request_finished : 1;
         uint16_t doorbell_length : 16;
-        uint32_t stream_id : 32;
+        uint32_t unique_id : 32;
     } wr_id;
 
     uint64_t value;
@@ -58,9 +58,9 @@ PickleSender::PickleSender(unique_ptr<RcQueuePair> qp, uint64_t packet_size) noe
     }
 }
 
-std::shared_ptr<Event> PickleSender::send(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t lkey) {
+std::shared_ptr<Event> PickleSender::send(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t lkey) {
     auto event = Event::create();
-    auto ticket = Ticket {stream_id, length, lkey, addr};
+    auto ticket = Ticket {unique_id, length, lkey, addr};
     PICKLE_ASSERT(this->send_request_command_queue_.enqueue({.ticket = ticket, .event = event}));
     return event;
 }
@@ -96,9 +96,9 @@ void PickleSender::poll() noexcept(false) {
     uint64_t count_dequeued = this->send_request_command_queue_.try_dequeue_bulk(commands.begin(), kMagic);
     for (uint64_t i = 0; i < count_dequeued; ++i) {
         auto command = std::move(commands[i]);
-        auto stream_id = command.ticket.stream_id;
-        this->pending_local_send_request_map_[stream_id].push(std::move(command.ticket));
-        this->pending_local_send_event_map_[stream_id].push(std::move(command.event));
+        auto unique_id = command.ticket.unique_id;
+        this->pending_local_send_request_map_[unique_id].push(std::move(command.ticket));
+        this->pending_local_send_event_map_[unique_id].push(std::move(command.event));
     }
 
     // Received from thread_post_recv
@@ -106,7 +106,7 @@ void PickleSender::poll() noexcept(false) {
     while (!remote_recv_request_queue_.empty() && count < kMagic) {
         auto ticket = std::move(remote_recv_request_queue_.front());
         remote_recv_request_queue_.pop();
-        pending_remote_recv_request_map_[ticket.stream_id].push(std::move(ticket));
+        pending_remote_recv_request_map_[ticket.unique_id].push(std::move(ticket));
         ++count;
     }
 
@@ -120,9 +120,9 @@ void PickleSender::poll() noexcept(false) {
             break;
         }
 
-        uint32_t stream_id = item.first;
+        uint32_t unique_id = item.first;
         auto& pending_remote_recv_request_queue = item.second;
-        auto& pending_local_send_request_queue = this->pending_local_send_request_map_[stream_id];
+        auto& pending_local_send_request_queue = this->pending_local_send_request_map_[unique_id];
 
         while (this->wr_occupied_ < this->send_wr_list_.size() && !pending_remote_recv_request_queue.empty()
                && !pending_local_send_request_queue.empty()) {
@@ -152,7 +152,7 @@ void PickleSender::poll() noexcept(false) {
                 opcode = ibv_wr_opcode::IBV_WR_RDMA_WRITE_WITH_IMM;
                 write_size = llength;
                 wr_id.wr_id.doorbell_length = doorbell_length;
-                wr_id.wr_id.stream_id = stream_id;
+                wr_id.wr_id.unique_id = unique_id;
                 wr_id.wr_id.request_finished = true;
                 pending_remote_recv_request_queue.pop();
                 pending_local_send_request_queue.pop();
@@ -161,7 +161,7 @@ void PickleSender::poll() noexcept(false) {
                 opcode = ibv_wr_opcode::IBV_WR_RDMA_WRITE;
                 write_size = this->packet_size_;
                 wr_id.wr_id.doorbell_length = doorbell_length;
-                wr_id.wr_id.stream_id = stream_id;
+                wr_id.wr_id.unique_id = unique_id;
                 wr_id.wr_id.request_finished = false;
                 remote_recv_request.addr += this->packet_size_;
                 remote_recv_request.length -= this->packet_size_;
@@ -179,7 +179,7 @@ void PickleSender::poll() noexcept(false) {
             this->send_wr_list_[wr_list_index].wr_id = wr_id.value;
             this->send_wr_list_[wr_list_index].next = nullptr;
             this->send_wr_list_[wr_list_index].opcode = opcode;
-            this->send_wr_list_[wr_list_index].imm_data = reinterpret_cast<__be32>(stream_id);
+            this->send_wr_list_[wr_list_index].imm_data = reinterpret_cast<__be32>(unique_id);
             this->send_wr_list_[wr_list_index].wr.rdma.remote_addr = raddr;
             this->send_wr_list_[wr_list_index].wr.rdma.rkey = rkey;
             this->send_wr_list_[wr_list_index].sg_list = &(this->send_sge_list_[wr_list_index]);
@@ -226,12 +226,12 @@ void PickleSender::poll() noexcept(false) {
             wrid_t wr_id {.value = wc.wr_id};
             uint16_t doorbell_length = wr_id.wr_id.doorbell_length;
             bool request_finished = wr_id.wr_id.request_finished;
-            uint32_t stream_id = wr_id.wr_id.stream_id;
+            uint32_t unique_id = wr_id.wr_id.unique_id;
 
             this->wr_occupied_ -= doorbell_length;
             if (request_finished) {
-                this->pending_local_send_event_map_[stream_id].front()->notify();
-                this->pending_local_send_event_map_[stream_id].pop();
+                this->pending_local_send_event_map_[unique_id].front()->notify();
+                this->pending_local_send_event_map_[unique_id].pop();
             }
         }
     }
@@ -268,9 +268,9 @@ shared_ptr<PickleRecver> PickleRecver::create(unique_ptr<RcQueuePair> qp, shared
     return shared_ptr<PickleRecver>(new PickleRecver(std::move(qp), std::move(flusher)));
 }
 
-std::shared_ptr<Event> PickleRecver::recv(uint32_t stream_id, uint64_t addr, uint32_t length, uint32_t rkey) {
+std::shared_ptr<Event> PickleRecver::recv(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t rkey) {
     auto event = Event::create();
-    auto ticket = Ticket {stream_id, length, rkey, addr};
+    auto ticket = Ticket {unique_id, length, rkey, addr};
     PICKLE_ASSERT(this->recv_request_command_queue_.enqueue({.ticket = ticket, .event = event}));
     return event;
 }
@@ -281,7 +281,7 @@ void PickleRecver::poll() noexcept(false) {
     for (uint64_t i = 0; i < count_dequeued; ++i) {
         auto& command = commands[i];
         this->pending_local_recv_request_queue_.push(command.ticket);
-        this->pending_local_recv_request_map_[command.ticket.stream_id].emplace(std::move(command));
+        this->pending_local_recv_request_map_[command.ticket.unique_id].emplace(std::move(command));
         this->count_pending_requests_++;
     }
 
@@ -338,9 +338,9 @@ void PickleRecver::poll() noexcept(false) {
             wc.vendor_err,
             ibv_wc_status_str(wc.status)
         );
-        uint32_t stream_id = reinterpret_cast<uint32_t>(wc.imm_data);
+        uint32_t unique_id = reinterpret_cast<uint32_t>(wc.imm_data);
 
-        auto& queue = this->pending_local_recv_request_map_[stream_id];
+        auto& queue = this->pending_local_recv_request_map_[unique_id];
         auto command = std::move(queue.front());
         queue.pop();
         this->count_pending_requests_--;
