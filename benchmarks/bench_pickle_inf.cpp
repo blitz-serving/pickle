@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include "pickle.h"
+#include "executor_rdma.h"
 #include "pickle_logger.h"
 #include "rdma_util.h"
 

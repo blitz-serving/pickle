@@ -1,19 +1,16 @@
 #pragma once
 
 #include <infiniband/verbs.h>
-#include <x86intrin.h>
+#include <linux/types.h>
 
-#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <format>
-#include <map>
 #include <memory>
 #include <queue>
-#include <string>
 #include <vector>
 
-#include "concurrentqueue.h"
+#include "executor_common.h"
 #include "pickle_logger.h"
 #include "rdma_util.h"
 
@@ -23,11 +20,6 @@ using ::rdma_util::CompletionQueue;
 using ::rdma_util::MemoryRegion;
 using ::rdma_util::ProtectionDomain;
 using ::rdma_util::RcQueuePair;
-
-static const uint64_t kMagic = 32;
-
-template<typename T>
-using Queue = moodycamel::ConcurrentQueue<T>;
 
 struct alignas(32) Ticket {
     uint32_t unique_id;
@@ -40,47 +32,6 @@ struct alignas(32) Ticket {
     }
 };
 
-template<typename T>
-using MultiMap = std::map<uint32_t, std::queue<T>>;
-
-class Event {
-private:
-    std::atomic<bool> finished_ = false;
-
-public:
-    Event() = default;
-    Event(const Event&) = delete;
-    Event& operator=(const Event&) = delete;
-    Event(Event&&) = delete;
-    Event& operator=(Event&&) = delete;
-    ~Event() = default;
-
-    static std::shared_ptr<Event> create() {
-        return std::make_shared<Event>();
-    }
-
-    bool is_notified() const {
-        return this->finished_.load(std::memory_order_acquire);
-    }
-
-    void notify() {
-        this->finished_.store(true, std::memory_order_release);
-#ifndef BUSY_WAIT
-        this->finished_.notify_all();
-#endif
-    }
-
-    void wait() {
-#ifndef BUSY_WAIT
-        this->finished_.wait(false, std::memory_order_acquire);
-#else
-        while (!this->finished_.load(std::memory_order_acquire)) {
-            _mm_pause();
-        }
-#endif
-    }
-};
-
 struct Command {
     Ticket ticket;
     std::shared_ptr<Event> event;
@@ -88,7 +39,7 @@ struct Command {
 
 class PickleSender {
 private:
-    uint32_t packet_size_;
+    uint64_t packet_size_;
 
     std::queue<Ticket> remote_recv_request_queue_;
     Queue<Command> send_request_command_queue_;

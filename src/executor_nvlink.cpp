@@ -1,4 +1,4 @@
-#include "nvlink_executor.h"
+#include "executor_nvlink.h"
 
 #include <emmintrin.h>
 
@@ -12,19 +12,6 @@ namespace pickle {
 
 using namespace std;
 using namespace std::chrono_literals;
-
-// ==================== 辅助：CUDA 错误检查 ====================
-
-#define NVL_CHECK_CUDA(expr)                                                                           \
-    do {                                                                                               \
-        cudaError_t err = expr;                                                                        \
-        if (err != cudaSuccess) {                                                                      \
-            fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
-            exit(1);                                                                                   \
-        }                                                                                              \
-    } while (0)
-
-// ==================== NvlinkSender ====================
 
 NvlinkSender::NvlinkSender(
     int src_device,
@@ -59,7 +46,7 @@ std::shared_ptr<Event> NvlinkSender::send(uint32_t unique_id, void* src_ptr, uin
 
     // 假设调用方已经在正确的 src_device 上设置了 CUDA context。
     // 若需要更强的封装，可以在外面绑定线程或手动调用 cudaSetDevice。
-    NVL_CHECK_CUDA(cudaIpcGetMemHandle(&ticket.src_handle, src_ptr));
+    CUDA_CHECK(cudaIpcGetMemHandle(&ticket.src_handle, src_ptr));
 
     // TODO: what if the queue is full ?
     this->send_ticket_queue_.try_push(ticket).unwrap();
@@ -117,11 +104,11 @@ NvlinkCopyExecutor::~NvlinkCopyExecutor() {
 
 void NvlinkCopyExecutor::run() noexcept {
     // 绑定本线程的 CUDA context
-    NVL_CHECK_CUDA(cudaSetDevice(this->local_device_));
-    NVL_CHECK_CUDA(cudaStreamCreateWithFlags(&this->stream_, cudaStreamNonBlocking));
+    CUDA_CHECK(cudaSetDevice(this->local_device_));
+    CUDA_CHECK(cudaStreamCreateWithFlags(&this->stream_, cudaStreamNonBlocking));
 
     cudaEvent_t completion_event;
-    NVL_CHECK_CUDA(cudaEventCreateWithFlags(&completion_event, cudaEventDisableTiming));
+    CUDA_CHECK(cudaEventCreateWithFlags(&completion_event, cudaEventDisableTiming));
 
     while (!this->stop_flag_.load(std::memory_order_acquire)) {
         NvlinkCopyTask task;
@@ -145,19 +132,17 @@ void NvlinkCopyExecutor::run() noexcept {
 
         // 打开远端的 cudaIpcMemHandle，获得本进程可见的 device pointer。
         void* remote_ptr = nullptr;
-        NVL_CHECK_CUDA(cudaIpcOpenMemHandle(&remote_ptr, ticket.src_handle, cudaIpcMemLazyEnablePeerAccess));
+        CUDA_CHECK(cudaIpcOpenMemHandle(&remote_ptr, ticket.src_handle, cudaIpcMemLazyEnablePeerAccess));
 
         // 在本 GPU 的 copy engine 上做 DeviceToDevice 复制（SM-free）
-        NVL_CHECK_CUDA(
-            cudaMemcpyAsync(req.dst_ptr, remote_ptr, ticket.length, cudaMemcpyDeviceToDevice, this->stream_)
-        );
+        CUDA_CHECK(cudaMemcpyAsync(req.dst_ptr, remote_ptr, ticket.length, cudaMemcpyDeviceToDevice, this->stream_));
 
         // 通过 cudaEvent 等待这一批 copy 完成。
-        NVL_CHECK_CUDA(cudaEventRecord(completion_event, this->stream_));
-        NVL_CHECK_CUDA(cudaEventSynchronize(completion_event));
+        CUDA_CHECK(cudaEventRecord(completion_event, this->stream_));
+        CUDA_CHECK(cudaEventSynchronize(completion_event));
 
         // 关闭 Ipc handle
-        NVL_CHECK_CUDA(cudaIpcCloseMemHandle(remote_ptr));
+        CUDA_CHECK(cudaIpcCloseMemHandle(remote_ptr));
 
         // 通知本地应用：对应的 recv() 已经完成
         if (task.local_event) {
@@ -169,8 +154,8 @@ void NvlinkCopyExecutor::run() noexcept {
         this->ack_queue_.try_push(ack).unwrap();
     }
 
-    NVL_CHECK_CUDA(cudaEventDestroy(completion_event));
-    NVL_CHECK_CUDA(cudaStreamDestroy(this->stream_));
+    CUDA_CHECK(cudaEventDestroy(completion_event));
+    CUDA_CHECK(cudaStreamDestroy(this->stream_));
 }
 
 // ==================== NvlinkRecver ====================
@@ -280,4 +265,4 @@ void NvlinkRecver::poll() noexcept {
 
 }  // namespace pickle
 
-#undef NVL_CHECK_CUDA
+#undef CUDA_CHECK

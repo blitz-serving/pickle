@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include "pickle.h"
+#include "executor_rdma.h"
 #include "pickle_logger.h"
 
 constexpr const char* kDevice1 = "ib7s400p0";

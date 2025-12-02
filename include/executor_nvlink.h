@@ -4,14 +4,18 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <format>
+#include <map>
+#include <memory>
+#include <string>
 #include <thread>
 
-#include "pickle.h"
+#include "executor_common.h"
 #include "spsc.h"
 
-// ==================== 辅助：CUDA 错误检查 ====================
-
-#define NVL_CHECK_CUDA(expr)                                                                           \
+#define CUDA_CHECK(expr)                                                                               \
     do {                                                                                               \
         cudaError_t err = expr;                                                                        \
         if (err != cudaSuccess) {                                                                      \
@@ -207,5 +211,3 @@ public:
 };
 
 }  // namespace pickle
-
-#undef NVL_CHECK_CUDA

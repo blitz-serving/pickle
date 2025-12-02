@@ -14,10 +14,10 @@
 #include <iostream>
 #include <thread>
 
-#include "nvlink_executor.h"
+#include "executor_nvlink.h"
 #include "spsc.h"
 
-#define NVL_CHECK_CUDA(expr)                                                                           \
+#define CUDA_CHECK(expr)                                                                           \
     do {                                                                                               \
         cudaError_t err = expr;                                                                        \
         if (err != cudaSuccess) {                                                                      \
@@ -50,14 +50,14 @@ int run_child_recver() {
     std::cout << "[Child] Receiver process started (PID=" << getpid() << ")\n";
 
     int device_count = 0;
-    NVL_CHECK_CUDA(cudaGetDeviceCount(&device_count));
+    CUDA_CHECK(cudaGetDeviceCount(&device_count));
     if (device_count <= GPU_RECVER) {
         std::cerr << "[Child] Need at least " << (GPU_RECVER + 1) << " GPUs, got " << device_count << std::endl;
         return 1;
     }
 
     // 1. 绑定 GPU1
-    NVL_CHECK_CUDA(cudaSetDevice(GPU_RECVER));
+    CUDA_CHECK(cudaSetDevice(GPU_RECVER));
 
     // 2. 创建 NvlinkRecver
     auto recver = NvlinkRecver::create(
@@ -69,7 +69,7 @@ int run_child_recver() {
     // 4. 在 GPU1 上分配接收 buffer
     constexpr int N = 16;
     int* dst = nullptr;
-    NVL_CHECK_CUDA(cudaMalloc(&dst, N * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&dst, N * sizeof(int)));
 
     uint32_t uid = 1234;
 
@@ -83,7 +83,7 @@ int run_child_recver() {
 
     // 6. 拷贝回 host 校验数据
     int host_out[N];
-    NVL_CHECK_CUDA(cudaMemcpy(host_out, dst, N * sizeof(int), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(host_out, dst, N * sizeof(int), cudaMemcpyDeviceToHost));
 
     std::cout << "[Child] Received data: ";
     for (int i = 0; i < N; ++i) {
@@ -108,7 +108,7 @@ int run_child_recver() {
         std::cout << "[Child] Data check FAILED.\n";
     }
 
-    NVL_CHECK_CUDA(cudaFree(dst));
+    CUDA_CHECK(cudaFree(dst));
 
     std::cout << "[Child] Receiver process exiting.\n";
     return ok ? 0 : 1;
@@ -118,14 +118,14 @@ int run_parent_sender(pid_t child_pid) {
     std::cout << "[Parent] Sender process started (PID=" << getpid() << ", child=" << child_pid << ")\n";
 
     int device_count = 0;
-    NVL_CHECK_CUDA(cudaGetDeviceCount(&device_count));
+    CUDA_CHECK(cudaGetDeviceCount(&device_count));
     if (device_count <= GPU_SENDER || device_count <= GPU_RECVER) {
         std::cerr << "[Parent] Need at least " << (GPU_RECVER + 1) << " GPUs, got " << device_count << std::endl;
         return 1;
     }
 
     // 1. 绑定 GPU0
-    NVL_CHECK_CUDA(cudaSetDevice(GPU_SENDER));
+    CUDA_CHECK(cudaSetDevice(GPU_SENDER));
 
     // 2. 创建 NvlinkSender
     auto sender = NvlinkSender::create(
@@ -138,13 +138,13 @@ int run_parent_sender(pid_t child_pid) {
     // 4. 在 GPU0 上分配并填充发送数据
     constexpr int N = 16;
     int* src = nullptr;
-    NVL_CHECK_CUDA(cudaMalloc(&src, N * sizeof(int)));
+    CUDA_CHECK(cudaMalloc(&src, N * sizeof(int)));
 
     int host_data[N];
     for (int i = 0; i < N; ++i) {
         host_data[i] = i * 10;
     }
-    NVL_CHECK_CUDA(cudaMemcpy(src, host_data, N * sizeof(int), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(src, host_data, N * sizeof(int), cudaMemcpyHostToDevice));
 
     uint32_t uid = 1234;
 
@@ -178,7 +178,7 @@ int run_parent_sender(pid_t child_pid) {
         return 1;
     }
 
-    NVL_CHECK_CUDA(cudaFree(src));
+    CUDA_CHECK(cudaFree(src));
 
     std::cout << "[Parent] All done, test PASSED.\n";
     return 0;

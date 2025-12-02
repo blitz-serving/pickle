@@ -41,7 +41,7 @@ target_include_directories(rdma_util PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 
-add_library(pickle "src/pickle.cpp" "src/nvlink_executor.cpp")
+add_library(pickle "src/executor_rdma.cpp" "src/executor_nvlink.cpp")
 
 target_link_libraries(pickle PUBLIC rdma_util CUDA::cudart)
 
