@@ -30,6 +30,9 @@ if(BUILD_TESTS)
     add_subdirectory(third_party/googletest)
 endif()
 
+enable_language(CUDA)
+find_package(CUDAToolkit REQUIRED)
+
 # Create rdma_util library
 add_library(rdma_util "src/rdma_util.cpp")
 target_link_libraries(rdma_util PUBLIC ibverbs concurrentqueue)
@@ -38,15 +41,14 @@ target_include_directories(rdma_util PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 
-add_library(pickle "src/pickle.cpp")
-target_link_libraries(pickle PUBLIC rdma_util)
+add_library(pickle "src/pickle.cpp" "src/nvlink_executor.cpp")
+
+target_link_libraries(pickle PUBLIC rdma_util CUDA::cudart)
+
 target_include_directories(pickle PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
-
-enable_language(CUDA)
-find_package(CUDAToolkit)
 
 # Add test executables
 if(BUILD_TESTS)

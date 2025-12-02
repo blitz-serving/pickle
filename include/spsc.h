@@ -77,15 +77,31 @@ inline std::ostream& operator<<(std::ostream& os, const Error& err) {
     return os;
 }
 
+enum class QueueError {
+    QueueFull,
+    QueueEmpty,
+};
+
+inline std::ostream& operator<<(std::ostream& os, const QueueError& err) {
+    switch (err) {
+        case QueueError::QueueFull:
+            os << "QueueFull";
+            break;
+        case QueueError::QueueEmpty:
+            os << "QueueEmpty";
+            break;
+    }
+    return os;
+}
+
+enum class Role {
+    Producer,
+    Consumer,
+};
+
 template<typename T>
     requires std::is_trivially_copyable_v<T>
 class SPSCQueue {
-public:
-    enum class Role {
-        Producer,
-        Consumer,
-    };
-
 private:
     // 整个共享内存的 header，负责跨进程生命周期管理 + 角色管理
     struct alignas(64) SharedMemoryHeader {
@@ -108,8 +124,6 @@ private:
     static constexpr std::uint32_t kMagic = 0x53505343;  // 'SPSC'
 
 public:
-    using value_type = T;
-
     SPSCQueue() = default;
 
     SPSCQueue(const SPSCQueue&) = delete;
@@ -162,11 +176,15 @@ public:
     // ==================== 共享内存工厂接口 ====================
 
     // 创建新的共享内存，并在其中构造 SPSCQueue。
-    // size_bytes 参数为「队列数据区」大小（不包含 SharedMemoryHeader），
-    // 内部会自动在前面预留 SharedMemoryHeader 空间。
+    // size_bytes 参数为「整个共享内存对象的大小」，包含 SharedMemoryHeader。
     static result::Result<SPSCQueue, Error>
     create(const std::string& name, std::size_t size_bytes, Role role) noexcept {
-        const std::size_t total_size = sizeof(SharedMemoryHeader) + size_bytes;
+        const std::size_t total_size = size_bytes;
+
+        // 至少要能放下 SharedMemoryHeader，实际能不能放下 Queue 再交给 init_layout 检查
+        if (total_size < sizeof(SharedMemoryHeader)) {
+            return result::Err(Error::NotEnoughSpace);
+        }
 
         int fd = ::shm_open(name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
         if (fd == -1) {
@@ -188,17 +206,18 @@ public:
 
         auto* shm_header = static_cast<SharedMemoryHeader*>(ptr);
         auto* user_data = reinterpret_cast<std::byte*>(ptr) + sizeof(SharedMemoryHeader);
+        const std::size_t user_size = total_size - sizeof(SharedMemoryHeader);
 
         // 初始化 header（这里没有并发，直接写即可）
         shm_header->ref_count.store(1, std::memory_order_release);
-        shm_header->user_size.store(size_bytes, std::memory_order_release);
+        shm_header->user_size.store(user_size, std::memory_order_release);
         shm_header->magic.store(kMagic, std::memory_order_release);
         shm_header->producer_attached.store(role == Role::Producer ? 1u : 0u, std::memory_order_release);
         shm_header->consumer_attached.store(role == Role::Consumer ? 1u : 0u, std::memory_order_release);
 
         SPSCQueue q(fd, shm_header, total_size, name, role);
 
-        TRY(q.init_layout(user_data, size_bytes, /*initialize=*/true));
+        TRY(q.init_layout(user_data, user_size, /*initialize=*/true));
         return result::Ok(std::move(q));
     }
 
@@ -324,12 +343,12 @@ public:
         }
     }
 
-    // 一些简单的便捷封装
-
+    // 这里的 size_bytes 是整个 shm 的大小（包含 SharedMemoryHeader）
     static result::Result<SPSCQueue, Error> create_producer(const std::string& name, std::size_t size_bytes) noexcept {
         return create(name, size_bytes, Role::Producer);
     }
 
+    // 这里的 size_bytes 是整个 shm 的大小（包含 SharedMemoryHeader）
     static result::Result<SPSCQueue, Error> create_consumer(const std::string& name, std::size_t size_bytes) noexcept {
         return create(name, size_bytes, Role::Consumer);
     }
@@ -365,13 +384,13 @@ public:
         return header_->capacity - 1;
     }
 
-    result::Result<void, Error> try_push(const T& value) noexcept {
+    result::Result<void, QueueError> try_push(const T& value) noexcept {
         auto tail = header_->tail.load(std::memory_order_relaxed);
         auto head = header_->head.load(std::memory_order_acquire);
 
         const auto next_tail = increment(tail);
         if (next_tail == head) {
-            return result::Err(Error::QueueFull);
+            return result::Err(QueueError::QueueFull);
         }
 
         data_[tail] = value;
@@ -379,12 +398,12 @@ public:
         return result::Ok();
     }
 
-    result::Result<T, Error> try_pop() noexcept {
+    result::Result<T, QueueError> try_pop() noexcept {
         auto head = header_->head.load(std::memory_order_relaxed);
         auto tail = header_->tail.load(std::memory_order_acquire);
 
         if (head == tail) {
-            return result::Err(Error::QueueEmpty);
+            return result::Err(QueueError::QueueEmpty);
         }
 
         T value = data_[head];
@@ -465,7 +484,7 @@ private:
             }
         }
 
-        return result::Ok();  // Ok<void>
+        return result::Ok();
     }
 
     static result::Result<void, Error> acquire_role(SharedMemoryHeader* shm_header, Role role) noexcept {

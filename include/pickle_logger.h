@@ -120,11 +120,10 @@ static inline auto _pickle_format_(T&& f, Args&&... args)
         }                                          \
     } while (0)
 
-#define PICKLE_ASSERT(expr, ...)                                                                                \
-    do {                                                                                                        \
-        if (!(expr)) {                                                                                          \
-            throw std::runtime_error(                                                                           \
-                ::fmt::format("Assertion failed. {} ({}:{})", _pickle_format_(__VA_ARGS__), __FILE__, __LINE__) \
-            );                                                                                                  \
-        }                                                                                                       \
+#define PICKLE_ASSERT(expr, ...)                                                                              \
+    do {                                                                                                      \
+        if (!(expr)) {                                                                                        \
+            ::fmt::println("Assertion failed. {} ({}:{})", _pickle_format_(__VA_ARGS__), __FILE__, __LINE__); \
+            std::abort();                                                                                     \
+        }                                                                                                     \
     } while (0)
