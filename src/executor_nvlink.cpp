@@ -10,7 +10,6 @@
 
 namespace pickle {
 
-using namespace std;
 using namespace std::chrono_literals;
 
 NvlinkSender::NvlinkSender(
@@ -264,5 +263,3 @@ void NvlinkRecver::poll() noexcept {
 }
 
 }  // namespace pickle
-
-#undef CUDA_CHECK

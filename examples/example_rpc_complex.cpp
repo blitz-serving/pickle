@@ -53,7 +53,7 @@ struct rpc_data_t {
 class rpc_handle_t: public rpc_core::RpcHandle {
 private:
     std::shared_ptr<rdma_util::MemoryRegion> mr_;
-    std::shared_ptr<pickle::Flusher> flusher_;
+    std::shared_ptr<pickle::RdmaFlusher> flusher_;
     std::shared_ptr<std::atomic_bool> stop_flag_;
     std::thread flusher_thread_;
 
@@ -67,7 +67,7 @@ public:
     rpc_handle_t(rpc_handle_t&&) = delete;
     rpc_handle_t& operator=(rpc_handle_t&&) = delete;
 
-    rpc_handle_t(std::shared_ptr<rdma_util::MemoryRegion> mr, std::unique_ptr<pickle::Flusher> flusher) :
+    rpc_handle_t(std::shared_ptr<rdma_util::MemoryRegion> mr, std::unique_ptr<pickle::RdmaFlusher> flusher) :
         mr_(std::move(mr)),
         flusher_(std::move(flusher)),
         stop_flag_(std::make_shared<std::atomic_bool>(false)) {
@@ -111,10 +111,10 @@ public:
                     ERROR("Requested size exceeds buffer size");
                     return rpc_data_t {rpc_type_t::RPC_TYPE_ERROR, {}}.into_bytes();
                 }
-                std::shared_ptr<pickle::PickleRecver> recver {nullptr};
+                std::shared_ptr<pickle::RdmaRecver> recver {nullptr};
                 {
                     std::lock_guard<std::mutex> lock(this->qp_mutex_);
-                    recver = pickle::PickleRecver::create(std::move(this->qp_), this->flusher_);
+                    recver = pickle::RdmaRecver::create(std::move(this->qp_), this->flusher_);
                 }
                 auto handle =
                     recver->recv(0, reinterpret_cast<uint64_t>(this->mr_->get_addr()), size, this->mr_->get_lkey());
@@ -142,8 +142,8 @@ void client(const char* ip, int port) {
     auto mr = rdma_util::MemoryRegion::create(
         qp->get_pd(),
         std::shared_ptr<void>(
-            cuda_util::malloc_gpu_buffer(kDataBufferSize, kClientGPU),
-            [](void* p) { cuda_util::free_gpu_buffer(p); }
+            cuda_util::try_malloc(kDataBufferSize, kClientGPU).unwrap(),
+            cuda_util::free_unwrap
         ),
         kDataBufferSize
     );
@@ -161,7 +161,7 @@ void client(const char* ip, int port) {
     // Bring up the connection
     qp->bring_up(response.data.handshake_data, 3);
     // The sender creation must be done after the handshake is completed and before the sending rpc
-    auto sender = pickle::PickleSender::create(std::move(qp));
+    auto sender = pickle::RdmaSender::create(std::move(qp));
     // Send
     auto handle = sender->send(0, reinterpret_cast<uint64_t>(mr->get_addr()), kDataBufferSize, mr->get_lkey());
     response = rpc_data_t::from_bytes(
@@ -181,12 +181,12 @@ int main() {
     auto mr = rdma_util::MemoryRegion::create(
         rdma_util::ProtectionDomain::create(rdma_util::Context::create(kServerRNIC)),
         std::shared_ptr<void>(
-            cuda_util::malloc_gpu_buffer(kDataBufferSize, kServerGPU),
-            [](void* p) { cuda_util::free_gpu_buffer(p); }
+            cuda_util::try_malloc(kDataBufferSize, kServerGPU).unwrap(),
+            cuda_util::free_unwrap
         ),
         kDataBufferSize
     );
-    auto flusher = pickle::Flusher::create(mr->get_pd());
+    auto flusher = pickle::RdmaFlusher::create(mr->get_pd());
     auto rpc_handle = std::make_shared<const rpc_handle_t>(std::move(mr), std::move(flusher));
     auto server = rpc_core::RpcServer("0.0.0.0", 12345, rpc_handle);
     server.start();

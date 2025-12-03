@@ -16,6 +16,7 @@
 
 namespace pickle {
 
+using namespace std;
 using ::rdma_util::CompletionQueue;
 using ::rdma_util::MemoryRegion;
 using ::rdma_util::ProtectionDomain;
@@ -27,52 +28,51 @@ struct alignas(32) Ticket {
     uint32_t key;
     uint64_t addr;
 
-    std::string to_string() const {
+    string to_string() const {
         return std::format("{{ unique_id: {}, key: {}, length: 0x{:x}, addr: 0x{:x} }}", unique_id, key, length, addr);
     }
 };
 
 struct Command {
     Ticket ticket;
-    std::shared_ptr<Event> event;
+    shared_ptr<Event> event;
 };
 
-class PickleSender {
+class RdmaSender {
 private:
     uint64_t packet_size_;
 
-    std::queue<Ticket> remote_recv_request_queue_;
+    queue<Ticket> remote_recv_request_queue_;
     Queue<Command> send_request_command_queue_;
     MultiMap<Ticket> pending_remote_recv_request_map_;
     MultiMap<Ticket> pending_local_send_request_map_;
-    MultiMap<std::shared_ptr<Event>> pending_local_send_event_map_;
+    MultiMap<shared_ptr<Event>> pending_local_send_event_map_;
 
-    std::shared_ptr<RcQueuePair> qp_;
+    shared_ptr<RcQueuePair> qp_;
     uint64_t wr_occupied_;
-    std::vector<ibv_send_wr> send_wr_list_;
-    std::vector<ibv_sge> send_sge_list_;
+    vector<ibv_send_wr> send_wr_list_;
+    vector<ibv_sge> send_sge_list_;
 
-    std::vector<ibv_wc> polled_send_wcs_;
-    std::vector<ibv_wc> polled_recv_wcs_;
+    vector<ibv_wc> polled_send_wcs_;
+    vector<ibv_wc> polled_recv_wcs_;
 
-    std::unique_ptr<MemoryRegion> host_recv_buffer_;
+    unique_ptr<MemoryRegion> host_recv_buffer_;
     uint64_t recv_buffer_addr_;
     uint32_t recv_buffer_lkey_;
 
-    PickleSender(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false);
+    RdmaSender(unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false);
 
 public:
-    PickleSender() = delete;
-    PickleSender(const PickleSender&) = delete;
-    PickleSender& operator=(const PickleSender&) = delete;
-    PickleSender(PickleSender&&) = delete;
-    PickleSender& operator=(PickleSender&&) = delete;
-    ~PickleSender() = default;
+    RdmaSender() = delete;
+    RdmaSender(const RdmaSender&) = delete;
+    RdmaSender& operator=(const RdmaSender&) = delete;
+    RdmaSender(RdmaSender&&) = delete;
+    RdmaSender& operator=(RdmaSender&&) = delete;
+    ~RdmaSender() = default;
 
-    static std::shared_ptr<PickleSender>
-    create(std::unique_ptr<RcQueuePair> qp, uint64_t packet_size = 256 * 1024) noexcept(false);
+    static shared_ptr<RdmaSender> create(unique_ptr<RcQueuePair> qp, uint64_t packet_size = 256 * 1024) noexcept(false);
 
-    [[nodiscard]] std::shared_ptr<Event> send(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t lkey);
+    [[nodiscard]] shared_ptr<Event> send(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t lkey);
 
     /**
      * @brief The executor of the PickleSender.
@@ -84,33 +84,33 @@ public:
 struct FlushInfo {
     uint32_t rkey;
     uint64_t raddr;
-    std::shared_ptr<Event> event;
+    shared_ptr<Event> event;
 };
 
-class Flusher {
+class RdmaFlusher {
 private:
-    std::unique_ptr<RcQueuePair> loopback_qp_;
-    std::unique_ptr<MemoryRegion> loopback_buffer_;
-    std::vector<ibv_wc> polled_wcs_;
+    unique_ptr<RcQueuePair> loopback_qp_;
+    unique_ptr<MemoryRegion> loopback_buffer_;
+    vector<ibv_wc> polled_wcs_;
 
     uint64_t pending_flushes_;
-    std::queue<std::shared_ptr<Event>> flushing_queue_;
-    std::vector<FlushInfo> flush_infos_;
+    queue<shared_ptr<Event>> flushing_queue_;
+    vector<FlushInfo> flush_infos_;
     Queue<FlushInfo> info_queue_;
 
-    Flusher(std::shared_ptr<ProtectionDomain>& pd) noexcept(false);
+    RdmaFlusher(shared_ptr<ProtectionDomain>& pd) noexcept(false);
 
 public:
-    Flusher() = delete;
-    Flusher(const Flusher&) = delete;
-    Flusher& operator=(const Flusher&) = delete;
-    Flusher(Flusher&&) = delete;
-    Flusher& operator=(Flusher&&) = delete;
-    ~Flusher() = default;
+    RdmaFlusher() = delete;
+    RdmaFlusher(const RdmaFlusher&) = delete;
+    RdmaFlusher& operator=(const RdmaFlusher&) = delete;
+    RdmaFlusher(RdmaFlusher&&) = delete;
+    RdmaFlusher& operator=(RdmaFlusher&&) = delete;
+    ~RdmaFlusher() = default;
 
-    static std::unique_ptr<Flusher> create(std::shared_ptr<ProtectionDomain> pd) noexcept(false);
+    static unique_ptr<RdmaFlusher> create(shared_ptr<ProtectionDomain> pd) noexcept(false);
 
-    void append(uint32_t rkey, uint64_t raddr, std::shared_ptr<Event> event) {
+    void append(uint32_t rkey, uint64_t raddr, shared_ptr<Event> event) {
         TRACE("pickle::Flusher::append() append FlushInfo: rkey={}, raddr={}", rkey, raddr);
         PICKLE_ASSERT(this->info_queue_.enqueue(FlushInfo {.rkey = rkey, .raddr = raddr, .event = std::move(event)}));
     }
@@ -122,42 +122,42 @@ public:
     void poll() noexcept(false);
 };
 
-class PickleRecver {
+class RdmaRecver {
 private:
     uint64_t count_pending_requests_;
-    std::queue<Ticket> pending_local_recv_request_queue_;
-    std::queue<uint64_t> free_slots;
+    queue<Ticket> pending_local_recv_request_queue_;
+    queue<uint64_t> free_slots;
     Queue<Command> recv_request_command_queue_;
     MultiMap<Command> pending_local_recv_request_map_;
 
-    std::shared_ptr<RcQueuePair> qp_;
-    std::vector<ibv_wc> polled_send_wcs_;
-    std::vector<ibv_wc> polled_recv_wcs_;
+    shared_ptr<RcQueuePair> qp_;
+    vector<ibv_wc> polled_send_wcs_;
+    vector<ibv_wc> polled_recv_wcs_;
 
-    std::unique_ptr<MemoryRegion> host_send_buffer_;
+    unique_ptr<MemoryRegion> host_send_buffer_;
     uint64_t send_buffer_addr_;
     uint32_t send_buffer_lkey_;
 
-    std::unique_ptr<MemoryRegion> host_recv_buffer_;
+    unique_ptr<MemoryRegion> host_recv_buffer_;
     uint64_t recv_buffer_addr_;
     uint32_t recv_buffer_lkey_;
 
-    std::shared_ptr<Flusher> flusher_;
+    shared_ptr<RdmaFlusher> flusher_;
 
-    PickleRecver(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<Flusher> flusher) noexcept(false);
+    RdmaRecver(unique_ptr<RcQueuePair> qp, shared_ptr<RdmaFlusher> flusher) noexcept(false);
 
 public:
-    PickleRecver() = delete;
-    PickleRecver(const PickleRecver&) = delete;
-    PickleRecver& operator=(const PickleRecver&) = delete;
-    PickleRecver(PickleRecver&&) = delete;
-    PickleRecver& operator=(PickleRecver&&) = delete;
-    ~PickleRecver() = default;
+    RdmaRecver() = delete;
+    RdmaRecver(const RdmaRecver&) = delete;
+    RdmaRecver& operator=(const RdmaRecver&) = delete;
+    RdmaRecver(RdmaRecver&&) = delete;
+    RdmaRecver& operator=(RdmaRecver&&) = delete;
+    ~RdmaRecver() = default;
 
-    static std::shared_ptr<PickleRecver>
-    create(std::unique_ptr<RcQueuePair> qp, std::shared_ptr<Flusher> flusher = nullptr) noexcept(false);
+    static shared_ptr<RdmaRecver>
+    create(unique_ptr<RcQueuePair> qp, shared_ptr<RdmaFlusher> flusher = nullptr) noexcept(false);
 
-    [[nodiscard]] std::shared_ptr<Event> recv(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t rkey);
+    [[nodiscard]] shared_ptr<Event> recv(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t rkey);
 
     /**
      * @brief The executor of the PickleRecver

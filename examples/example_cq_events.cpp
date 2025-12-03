@@ -6,12 +6,12 @@
 #include <cstdio>
 #include <cstdlib>
 
-#define ASSERT(expr)                                                           \
-    do {                                                                       \
-        if (!(expr)) {                                                         \
-            printf("%s:%d Assertion failed: %s\n", __FILE__, __LINE__, #expr); \
-            abort();                                                           \
-        }                                                                      \
+#define ASSERT(expr)                                                                    \
+    do {                                                                                \
+        if (!(expr)) {                                                                  \
+            fprintf(stderr, "%s:%d Assertion failed: %s\n", __FILE__, __LINE__, #expr); \
+            abort();                                                                    \
+        }                                                                               \
     } while (0)
 
 int main() {

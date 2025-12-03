@@ -8,6 +8,8 @@
 
 #include <cassert>
 
+#include "cuda_util.h"
+
 #define SOCKET_PATH "/tmp/cuda_ipc_socket"
 #define DATA_SIZE 1024
 
@@ -45,11 +47,7 @@ int parent() {
     }
 
     // 4. 分配CUDA内存
-    cudaStatus = cudaMalloc(&d_data, DATA_SIZE);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed: %s\n", cudaGetErrorString(cudaStatus));
-        exit(EXIT_FAILURE);
-    }
+    d_data = cuda_util::try_malloc(DATA_SIZE, 0).unwrap();
 
     // 初始化数据（示例）
     char message[DATA_SIZE] {};
@@ -60,7 +58,7 @@ int parent() {
     cudaStatus = cudaIpcGetMemHandle(&handle, d_data);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaIpcGetMemHandle failed: %s\n", cudaGetErrorString(cudaStatus));
-        cudaFree(d_data);
+        cuda_util::try_free(d_data).unwrap();
         exit(EXIT_FAILURE);
     }
 
@@ -68,7 +66,7 @@ int parent() {
     client_fd = accept(server_fd, NULL, NULL);
     if (client_fd < 0) {
         perror("accept error");
-        cudaFree(d_data);
+        cuda_util::try_free(d_data).unwrap();
         close(server_fd);
         exit(EXIT_FAILURE);
     }
@@ -84,7 +82,7 @@ int parent() {
     sleep(2);
 
     // 清理
-    cudaFree(d_data);
+    cuda_util::try_free(d_data).unwrap();
     close(client_fd);
     close(server_fd);
     unlink(SOCKET_PATH);

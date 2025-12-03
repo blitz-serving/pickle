@@ -12,6 +12,7 @@
 #include <thread>
 #include <vector>
 
+#include "cuda_util.h"
 #include "rdma_util.h"
 
 constexpr const char* kDevice1 = "ib7s400p0";
@@ -27,44 +28,6 @@ constexpr uint64_t kReadCount = 64ull * 1024 * 1024 * 1024 / kChunkSize;
 constexpr uint64_t kThreadNum = 8;
 
 static std::atomic<uint64_t> g_bytes_transferred(0);
-
-#define CUDA_CHECK(expr)                                                                               \
-    do {                                                                                               \
-        cudaError_t err = expr;                                                                        \
-        if (err != cudaSuccess) {                                                                      \
-            fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
-            exit(1);                                                                                   \
-        }                                                                                              \
-    } while (0)
-
-#define ASSERT(expr)                                                                       \
-    do {                                                                                   \
-        if (!(expr)) {                                                                     \
-            fprintf(stderr, "Assertion failed at %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-            exit(1);                                                                       \
-        }                                                                                  \
-    } while (0)
-
-void* malloc_host_buffer(uint64_t size) {
-    void* p = malloc(size);
-    ASSERT(p != nullptr);
-    return p;
-}
-
-void free_host_buffer(void* p) {
-    free(p);
-}
-
-void* malloc_device_buffer(uint64_t size, int device) {
-    void* p = nullptr;
-    CUDA_CHECK(cudaSetDevice(device));
-    CUDA_CHECK(cudaMalloc(&p, size));
-    return p;
-}
-
-void free_device_buffer(void* p) {
-    CUDA_CHECK(cudaFree(p));
-}
 
 int reporter_thread();
 int read_thread(
@@ -83,12 +46,13 @@ int main(int argc, char** argv) {
 
     if (strcmp(argv[1], "host") == 0) {
         printf("Using host buffer\n");
-        buffer_1 = std::shared_ptr<void>(malloc_host_buffer(kBufferSize), free_host_buffer);
-        buffer_2 = std::shared_ptr<void>(malloc_host_buffer(kBufferSize), free_host_buffer);
+        buffer_1 = std::shared_ptr<void>(std::malloc(kBufferSize), std::free);
+        buffer_2 = std::shared_ptr<void>(std::malloc(kBufferSize), std::free);
+        PICKLE_ASSERT(buffer_1 != nullptr && buffer_2 != nullptr);
     } else if (strcmp(argv[1], "device") == 0) {
         printf("Using device buffer\n");
-        buffer_1 = std::shared_ptr<void>(malloc_device_buffer(kBufferSize, kGPU1), free_device_buffer);
-        buffer_2 = std::shared_ptr<void>(malloc_device_buffer(kBufferSize, kGPU2), free_device_buffer);
+        buffer_1 = std::shared_ptr<void>(cuda_util::try_malloc(kBufferSize, kGPU1).unwrap(), cuda_util::free_unwrap);
+        buffer_2 = std::shared_ptr<void>(cuda_util::try_malloc(kBufferSize, kGPU2).unwrap(), cuda_util::free_unwrap);
     } else {
         fprintf(stderr, "Invalid argument: %s. Use 'host' or 'device'.\n", argv[1]);
         return -1;
@@ -189,7 +153,7 @@ int read_thread(
             sge_list[i]
         );
     }
-    ASSERT(rdma_util::RcQueuePair::freeze_wr_list(wr_list.data(), kOutstandingReads) == 0);
+    PICKLE_ASSERT(rdma_util::RcQueuePair::freeze_wr_list(wr_list.data(), kOutstandingReads) == 0);
     qp->post_send_wrs(wr_list.data());
     read_posted += kOutstandingReads;
 
@@ -241,7 +205,7 @@ int read_thread(
                     sge_list[i]
                 );
             }
-            ASSERT(rdma_util::RcQueuePair::freeze_wr_list(wr_list.data(), valid_length) == 0);
+            PICKLE_ASSERT(rdma_util::RcQueuePair::freeze_wr_list(wr_list.data(), valid_length) == 0);
             qp->post_send_wrs(wr_list.data());
             read_posted += valid_length;
         }

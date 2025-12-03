@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <thread>
 #include <vector>
 
@@ -25,41 +26,10 @@ int reporter_thread();
 int recver_thread(std::shared_ptr<rdma_util::RcQueuePair> qp, std::shared_ptr<rdma_util::MemoryRegion> mr);
 int sender_thread(std::shared_ptr<rdma_util::RcQueuePair> qp, std::shared_ptr<rdma_util::MemoryRegion> mr);
 
-#define CUDA_CHECK(expr)                                                                               \
-    do {                                                                                               \
-        cudaError_t err = expr;                                                                        \
-        if (err != cudaSuccess) {                                                                      \
-            fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
-            exit(1);                                                                                   \
-        }                                                                                              \
-    } while (0)
-
-#define ASSERT(expr)                                                                       \
-    do {                                                                                   \
-        if (!(expr)) {                                                                     \
-            fprintf(stderr, "Assertion failed at %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-            exit(1);                                                                       \
-        }                                                                                  \
-    } while (0)
-
-void* malloc_buffer(uint64_t size) {
-    void* p = nullptr;
-    // cudaSetDevice(2);
-    // CUDA_CHECK(cudaMalloc(&p, size));
-    p = malloc(size);
-    ASSERT(p != nullptr);
-    return p;
-}
-
-void free_buffer(void* p) {
-    ASSERT(p != nullptr);
-    // CUDA_CHECK(cudaFree(p));
-    free(p);
-}
-
 int main() {
-    auto send_buffer = std::shared_ptr<void>(malloc_buffer(kBufferSize), free_buffer);
-    auto recv_buffer = std::shared_ptr<void>(malloc_buffer(kBufferSize), free_buffer);
+    auto send_buffer = std::shared_ptr<void>(std::malloc(kBufferSize), std::free);
+    auto recv_buffer = std::shared_ptr<void>(std::malloc(kBufferSize), std::free);
+    PICKLE_ASSERT(send_buffer != nullptr && recv_buffer != nullptr);
 
     void* send_buffer_ptr = send_buffer.get();
     void* recv_buffer_ptr = recv_buffer.get();

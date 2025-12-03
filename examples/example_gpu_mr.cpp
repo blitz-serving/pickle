@@ -12,7 +12,7 @@ const char* kRNIC = "mlx5_5";
 constexpr uint64_t kSize = 75ull * 1024 * 1024 * 1024;
 
 int main() {
-    auto buffer = std::shared_ptr<void>(cuda_util::malloc_gpu_buffer(kSize, kGPU), cuda_util::free_gpu_buffer);
+    auto buffer = std::shared_ptr<void>(cuda_util::try_malloc(kSize, kGPU).unwrap(), cuda_util::free_unwrap);
     auto pd = rdma_util::ProtectionDomain::create(rdma_util::Context::create(kRNIC));
     auto mr = rdma_util::MemoryRegion::create(std::move(pd), buffer, kSize);
     return 0;

@@ -12,17 +12,9 @@
 #include <string>
 #include <thread>
 
+#include "cuda_util.h"
 #include "executor_common.h"
 #include "spsc.h"
-
-#define CUDA_CHECK(expr)                                                                               \
-    do {                                                                                               \
-        cudaError_t err = expr;                                                                        \
-        if (err != cudaSuccess) {                                                                      \
-            fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
-            exit(1);                                                                                   \
-        }                                                                                              \
-    } while (0)
 
 namespace pickle {
 

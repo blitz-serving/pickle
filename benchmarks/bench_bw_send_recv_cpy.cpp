@@ -28,8 +28,8 @@ int recver_thread(std::shared_ptr<rdma_util::RcQueuePair> qp, std::shared_ptr<rd
 int sender_thread(std::shared_ptr<rdma_util::RcQueuePair> qp, std::shared_ptr<rdma_util::MemoryRegion> mr);
 
 int main() {
-    auto send_buffer = cuda_util::malloc_gpu_buffer(kBufferSize, kGPU1);
-    auto recv_buffer = cuda_util::malloc_gpu_buffer(kBufferSize, kGPU2);
+    auto send_buffer = cuda_util::try_malloc(kBufferSize, kGPU1).unwrap();
+    auto recv_buffer = cuda_util::try_malloc(kBufferSize, kGPU2).unwrap();
 
     if (send_buffer == nullptr || recv_buffer == nullptr) {
         printf("Failed to allocate buffer\n");
@@ -67,8 +67,8 @@ int main() {
         t2.join();
     }
 
-    cuda_util::free_gpu_buffer(send_buffer);
-    cuda_util::free_gpu_buffer(recv_buffer);
+    cuda_util::try_free(send_buffer).unwrap();
+    cuda_util::try_free(recv_buffer).unwrap();
 
     return 0;
 }

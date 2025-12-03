@@ -5,7 +5,6 @@
 
 #include <cstdint>
 #include <memory>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -24,14 +23,6 @@ class ProtectionDomain;
 class CompletionQueue;
 class RcQueuePair;
 class MemoryRegion;
-
-struct DeviceInfo {
-    std::string device_name;
-    __be64 guid;
-
-    template<typename T>
-    explicit DeviceInfo(T&& device_name, __be64 guid) : device_name(std::forward<T>(device_name)), guid(guid) {}
-};
 
 class Context {
     friend class ProtectionDomain;
@@ -70,21 +61,6 @@ public:
     static std::unique_ptr<Context> create(const char* device_name) noexcept(false) {
         DEBUG("rdma_util::Context::create() creating context using {}", device_name);
         return std::unique_ptr<Context>(new Context(device_name));
-    }
-
-    static std::vector<DeviceInfo> get_device_infos() noexcept(false) {
-        int num_devices = 0;
-        auto device_list = ibv_get_device_list(&num_devices);
-        if (device_list == nullptr) {
-            throw std::runtime_error("Failed to get device list");
-        }
-        std::vector<DeviceInfo> devices;
-        devices.reserve(num_devices);
-        for (int i = 0; i < num_devices; i++) {
-            devices.emplace_back(ibv_get_device_name(device_list[i]), ibv_get_device_guid(device_list[i]));
-        }
-        ibv_free_device_list(device_list);
-        return devices;
     }
 
     Context() = delete;

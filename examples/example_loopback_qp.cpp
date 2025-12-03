@@ -6,33 +6,26 @@
 #include <cstdlib>
 #include <vector>
 
+#include "cuda_util.h"
 #include "rdma_util.h"
 
-#define RDMA_CHECK(expr)                                                        \
-    do {                                                                        \
-        int ret = expr;                                                         \
-        if (ret != 0) {                                                         \
-            printf("%s:%d RDMA_CHECK failed: %s\n", __FILE__, __LINE__, #expr); \
-            exit(EXIT_FAILURE);                                                 \
-        }                                                                       \
-    } while (0)
-
-#define ASSERT(expr)                                                                 \
-    do {                                                                             \
-        if (!(expr)) {                                                               \
-            fprintf(stderr, "%s:%d ASSERT failed: %s\n", __FILE__, __LINE__, #expr); \
-            exit(EXIT_FAILURE);                                                      \
-        }                                                                            \
+#define RDMA_CHECK(expr)                                                                 \
+    do {                                                                                 \
+        int ret = expr;                                                                  \
+        if (ret != 0) {                                                                  \
+            fprintf(stderr, "%s:%d RDMA_CHECK failed: %s\n", __FILE__, __LINE__, #expr); \
+            std::abort();                                                                \
+        }                                                                                \
     } while (0)
 
 int main(int argc, char* argv[]) {
     if (argc != 4) {
-        printf(
-
+        fprintf(
+            stderr,
             "Usage: %s <rnic_name> <gid_index> <gpu_index>\nUse host memory when <gpu_index>==-1\n",
             argv[0]
         );
-        exit(EXIT_FAILURE);
+        std::abort();
     }
 
     uint64_t buffer_size = 8ull * 1024 * 1024 * 1024;
@@ -45,18 +38,17 @@ int main(int argc, char* argv[]) {
 
     void* buffer = nullptr;
     if (device == -1) {
-        buffer = malloc(buffer_size);
+        buffer = std::malloc(buffer_size);
+        PICKLE_ASSERT(buffer != nullptr);
     } else {
-        cudaSetDevice(device);
-        cudaMalloc(&buffer, buffer_size);
+        buffer = cuda_util::try_malloc(buffer_size, device).unwrap();
     }
-    ASSERT(buffer != nullptr);
 
     {
         auto qp = rdma_util::RcQueuePair::create(dev_name);
         auto mr = rdma_util::MemoryRegion::create(qp->get_pd(), buffer, buffer_size);
         qp->bring_up(qp->get_handshake_data(gid_index), gid_index);
-        ASSERT(qp->query_qp_state() == ibv_qp_state::IBV_QPS_RTS);
+        PICKLE_ASSERT(qp->query_qp_state() == ibv_qp_state::IBV_QPS_RTS);
         std::vector<ibv_wc> polled_recv_wcs, polled_send_wcs;
 
         // Loopback send/recv
@@ -64,7 +56,8 @@ int main(int argc, char* argv[]) {
             RDMA_CHECK(qp->post_recv(i, reinterpret_cast<uint64_t>(buffer) + i * 1024, 1024, mr->get_lkey()));
         }
         for (int i = 10; i < 20; ++i) {
-            RDMA_CHECK(qp->post_send_send(i, reinterpret_cast<uint64_t>(buffer) + i * 1024, 1024, mr->get_lkey(), true)
+            RDMA_CHECK(
+                qp->post_send_send(i, reinterpret_cast<uint64_t>(buffer) + i * 1024, 1024, mr->get_lkey(), true)
             );
         }
 
@@ -112,9 +105,9 @@ int main(int argc, char* argv[]) {
     }
 
     if (device == -1) {
-        free(buffer);
+        std::free(buffer);
     } else {
-        cudaFree(buffer);
+        cuda_util::try_free(buffer).unwrap();
     }
 
     printf("Success\n");

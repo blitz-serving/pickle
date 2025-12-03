@@ -1,10 +1,12 @@
 #include "executor_rdma.h"
 
+#include <arpa/inet.h>
 #include <infiniband/verbs.h>
 #include <linux/types.h>
 
 #include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <utility>
 
@@ -30,11 +32,11 @@ struct alignas(64) Cacheline {
     uint8_t data[64];
 };
 
-shared_ptr<PickleSender> PickleSender::create(unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false) {
-    return shared_ptr<PickleSender>(new PickleSender(std::move(qp), packet_size));
+shared_ptr<RdmaSender> RdmaSender::create(unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false) {
+    return shared_ptr<RdmaSender>(new RdmaSender(std::move(qp), packet_size));
 }
 
-PickleSender::PickleSender(unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false) :
+RdmaSender::RdmaSender(unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false) :
     packet_size_(packet_size),
     qp_(std::move(qp)),
     wr_occupied_(0) {
@@ -58,14 +60,14 @@ PickleSender::PickleSender(unique_ptr<RcQueuePair> qp, uint64_t packet_size) noe
     }
 }
 
-shared_ptr<Event> PickleSender::send(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t lkey) {
+shared_ptr<Event> RdmaSender::send(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t lkey) {
     auto event = Event::create();
     auto ticket = Ticket {unique_id, length, lkey, addr};
     PICKLE_ASSERT(this->send_request_command_queue_.enqueue({.ticket = ticket, .event = event}));
     return event;
 }
 
-void PickleSender::poll() noexcept(false) {
+void RdmaSender::poll() noexcept(false) {
     int ret = this->qp_->poll_recv_cq_once(kMagic, this->polled_recv_wcs_);
 
     PICKLE_ASSERT(ret >= 0);
@@ -179,7 +181,7 @@ void PickleSender::poll() noexcept(false) {
             this->send_wr_list_[wr_list_index].wr_id = wr_id.value;
             this->send_wr_list_[wr_list_index].next = nullptr;
             this->send_wr_list_[wr_list_index].opcode = opcode;
-            this->send_wr_list_[wr_list_index].imm_data = reinterpret_cast<__be32>(unique_id);
+            this->send_wr_list_[wr_list_index].imm_data = htonl(unique_id);
             this->send_wr_list_[wr_list_index].wr.rdma.remote_addr = raddr;
             this->send_wr_list_[wr_list_index].wr.rdma.rkey = rkey;
             this->send_wr_list_[wr_list_index].sg_list = &(this->send_sge_list_[wr_list_index]);
@@ -237,7 +239,7 @@ void PickleSender::poll() noexcept(false) {
     }
 }
 
-PickleRecver::PickleRecver(unique_ptr<RcQueuePair> qp, shared_ptr<Flusher> flusher) noexcept(false) :
+RdmaRecver::RdmaRecver(unique_ptr<RcQueuePair> qp, shared_ptr<RdmaFlusher> flusher) noexcept(false) :
     count_pending_requests_(0),
     qp_(std::move(qp)),
     polled_send_wcs_(kMagic),
@@ -264,18 +266,18 @@ PickleRecver::PickleRecver(unique_ptr<RcQueuePair> qp, shared_ptr<Flusher> flush
     }
 }
 
-shared_ptr<PickleRecver> PickleRecver::create(unique_ptr<RcQueuePair> qp, shared_ptr<Flusher> flusher) noexcept(false) {
-    return shared_ptr<PickleRecver>(new PickleRecver(std::move(qp), std::move(flusher)));
+shared_ptr<RdmaRecver> RdmaRecver::create(unique_ptr<RcQueuePair> qp, shared_ptr<RdmaFlusher> flusher) noexcept(false) {
+    return shared_ptr<RdmaRecver>(new RdmaRecver(std::move(qp), std::move(flusher)));
 }
 
-shared_ptr<Event> PickleRecver::recv(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t rkey) {
+shared_ptr<Event> RdmaRecver::recv(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t rkey) {
     auto event = Event::create();
     auto ticket = Ticket {unique_id, length, rkey, addr};
     PICKLE_ASSERT(this->recv_request_command_queue_.enqueue({.ticket = ticket, .event = event}));
     return event;
 }
 
-void PickleRecver::poll() noexcept(false) {
+void RdmaRecver::poll() noexcept(false) {
     array<Command, kMagic> commands;
     uint64_t count_dequeued = this->recv_request_command_queue_.try_dequeue_bulk(commands.begin(), kMagic);
     for (uint64_t i = 0; i < count_dequeued; ++i) {
@@ -338,7 +340,7 @@ void PickleRecver::poll() noexcept(false) {
             wc.vendor_err,
             ibv_wc_status_str(wc.status)
         );
-        uint32_t unique_id = reinterpret_cast<uint32_t>(wc.imm_data);
+        uint32_t unique_id = ntohl(wc.imm_data);
 
         auto& queue = this->pending_local_recv_request_map_[unique_id];
         auto command = std::move(queue.front());
@@ -355,19 +357,18 @@ void PickleRecver::poll() noexcept(false) {
     }
 }
 
-Flusher::Flusher(shared_ptr<ProtectionDomain>& pd) noexcept(false) : pending_flushes_(0), flush_infos_(16) {
+RdmaFlusher::RdmaFlusher(shared_ptr<ProtectionDomain>& pd) noexcept(false) : pending_flushes_(0), flush_infos_(16) {
     shared_ptr cq = CompletionQueue::create(pd->get_context());
     this->loopback_qp_ = RcQueuePair::create(pd, cq, cq);
     this->loopback_qp_->bring_up(this->loopback_qp_->get_handshake_data());
-    this->loopback_buffer_ =
-        MemoryRegion::create(pd, shared_ptr<void>(new Cacheline, [](Cacheline* p) { delete p; }), sizeof(Cacheline));
+    this->loopback_buffer_ = MemoryRegion::create(pd, shared_ptr<void>(std::aligned_alloc(64, 64), std::free), 64);
 }
 
-unique_ptr<Flusher> Flusher::create(shared_ptr<ProtectionDomain> pd) noexcept(false) {
-    return unique_ptr<Flusher>(new Flusher(pd));
+unique_ptr<RdmaFlusher> RdmaFlusher::create(shared_ptr<ProtectionDomain> pd) noexcept(false) {
+    return unique_ptr<RdmaFlusher>(new RdmaFlusher(pd));
 }
 
-void Flusher::poll() noexcept(false) {
+void RdmaFlusher::poll() noexcept(false) {
     if (this->pending_flushes_ > 0) {
         int ret = this->loopback_qp_->poll_send_cq_once(kMagic, this->polled_wcs_);
         PICKLE_ASSERT(ret >= 0);

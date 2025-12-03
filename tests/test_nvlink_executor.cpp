@@ -14,17 +14,9 @@
 #include <iostream>
 #include <thread>
 
+#include "cuda_util.h"
 #include "executor_nvlink.h"
 #include "spsc.h"
-
-#define CUDA_CHECK(expr)                                                                           \
-    do {                                                                                               \
-        cudaError_t err = expr;                                                                        \
-        if (err != cudaSuccess) {                                                                      \
-            fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
-            exit(1);                                                                                   \
-        }                                                                                              \
-    } while (0)
 
 using namespace pickle;
 using namespace std::chrono_literals;
@@ -68,8 +60,7 @@ int run_child_recver() {
 
     // 4. 在 GPU1 上分配接收 buffer
     constexpr int N = 16;
-    int* dst = nullptr;
-    CUDA_CHECK(cudaMalloc(&dst, N * sizeof(int)));
+    int* dst = static_cast<int*>(cuda_util::try_malloc(N * sizeof(int), GPU_RECVER).unwrap());
 
     uint32_t uid = 1234;
 
@@ -108,7 +99,7 @@ int run_child_recver() {
         std::cout << "[Child] Data check FAILED.\n";
     }
 
-    CUDA_CHECK(cudaFree(dst));
+    cuda_util::try_free(dst).unwrap();
 
     std::cout << "[Child] Receiver process exiting.\n";
     return ok ? 0 : 1;
@@ -137,8 +128,7 @@ int run_parent_sender(pid_t child_pid) {
 
     // 4. 在 GPU0 上分配并填充发送数据
     constexpr int N = 16;
-    int* src = nullptr;
-    CUDA_CHECK(cudaMalloc(&src, N * sizeof(int)));
+    int* src = static_cast<int*>(cuda_util::try_malloc(N * sizeof(int), GPU_SENDER).unwrap());
 
     int host_data[N];
     for (int i = 0; i < N; ++i) {
@@ -178,7 +168,7 @@ int run_parent_sender(pid_t child_pid) {
         return 1;
     }
 
-    CUDA_CHECK(cudaFree(src));
+    cuda_util::try_free(src).unwrap();
 
     std::cout << "[Parent] All done, test PASSED.\n";
     return 0;

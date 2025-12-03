@@ -12,50 +12,15 @@
 #include <utility>
 #include <vector>
 
+#include "cuda_util.h"
 #include "executor_rdma.h"
 #include "pickle_logger.h"
 #include "rdma_util.h"
 
 using namespace std;
 
-#define CUDA_CHECK(expr)                                                                               \
-    do {                                                                                               \
-        cudaError_t err = expr;                                                                        \
-        if (err != cudaSuccess) {                                                                      \
-            fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(err)); \
-            exit(1);                                                                                   \
-        }                                                                                              \
-    } while (0)
-
-#define ASSERT(expr)                                                                       \
-    do {                                                                                   \
-        if (!(expr)) {                                                                     \
-            fprintf(stderr, "Assertion failed at %s:%d: %s\n", __FILE__, __LINE__, #expr); \
-            exit(1);                                                                       \
-        }                                                                                  \
-    } while (0)
-
-void* malloc_buffer(size_t size, int device) {
-    if (device < 0) {
-        return aligned_alloc(4096, size);
-    } else {
-        void* p = nullptr;
-        CUDA_CHECK(cudaSetDevice(device));
-        CUDA_CHECK(cudaMalloc(&p, size));
-        return p;
-    }
-}
-
-void free_buffer(void* p, int device) {
-    if (device < 0) {
-        free(p);
-    } else {
-        CUDA_CHECK(cudaFree(p));
-    }
-}
-
 inline std::pair<void*, size_t> count_aligned_chunks(void* ptr, size_t buffer_size, size_t chunk_size) {
-    assert(chunk_size > 0 && (chunk_size & (chunk_size - 1)) == 0);  // power of two
+    PICKLE_ASSERT(chunk_size > 0 && (chunk_size & (chunk_size - 1)) == 0);  // power of two
 
     uintptr_t p = reinterpret_cast<uintptr_t>(ptr);
     uintptr_t aligned_start = (p + chunk_size - 1) & ~(chunk_size - 1);
@@ -79,8 +44,8 @@ int main() {
 
     int ring_buffer_cap = 16;
 
-    auto buffer0 = shared_ptr<void> {malloc_buffer(buffer_size, gpu0), [gpu0](void* p) { free_buffer(p, gpu0); }};
-    auto buffer1 = shared_ptr<void> {malloc_buffer(buffer_size, gpu1), [gpu1](void* p) { free_buffer(p, gpu1); }};
+    auto buffer0 = std::shared_ptr<void>(cuda_util::try_malloc(buffer_size, gpu0).unwrap(), cuda_util::free_unwrap);
+    auto buffer1 = std::shared_ptr<void>(cuda_util::try_malloc(buffer_size, gpu1).unwrap(), cuda_util::free_unwrap);
 
     shared_ptr pd0 = rdma_util::ProtectionDomain::create(rdma_util::Context::create(nic0));
     shared_ptr pd1 = rdma_util::ProtectionDomain::create(rdma_util::Context::create(nic1));
@@ -88,21 +53,21 @@ int main() {
     shared_ptr mr0 = rdma_util::MemoryRegion::create(pd0, buffer0, buffer_size);
     shared_ptr mr1 = rdma_util::MemoryRegion::create(pd1, buffer1, buffer_size);
 
-    vector<shared_ptr<pickle::PickleSender>> senders;
-    vector<shared_ptr<pickle::PickleRecver>> recvers;
+    vector<shared_ptr<pickle::RdmaSender>> senders;
+    vector<shared_ptr<pickle::RdmaRecver>> recvers;
 
     for (int i = 0; i < num_channels; i++) {
         auto qp0 = rdma_util::RcQueuePair::create(pd0);
         auto qp1 = rdma_util::RcQueuePair::create(pd1);
         qp0->bring_up(qp1->get_handshake_data(gid_index), gid_index);
         qp1->bring_up(qp0->get_handshake_data(gid_index), gid_index);
-        senders.push_back(pickle::PickleSender::create(std::move(qp0)));
-        recvers.push_back(pickle::PickleRecver::create(std::move(qp1)));
+        senders.push_back(pickle::RdmaSender::create(std::move(qp0)));
+        recvers.push_back(pickle::RdmaRecver::create(std::move(qp1)));
     }
 
     atomic_uint64_t counter(0);
 
-    auto rand_send = [=, &counter](shared_ptr<pickle::PickleSender> sender, shared_ptr<pickle::MemoryRegion> mr) {
+    auto rand_send = [=, &counter](shared_ptr<pickle::RdmaSender> sender, shared_ptr<pickle::MemoryRegion> mr) {
         int unique_id = 0;
         vector<shared_ptr<pickle::Event>> events;
         auto [base_addr, num_chunks] = count_aligned_chunks(mr->get_addr(), mr->get_length(), chunk_size);
@@ -126,7 +91,7 @@ int main() {
         }
     };
 
-    auto rand_recv = [=](shared_ptr<pickle::PickleRecver> recver, shared_ptr<pickle::MemoryRegion> mr) {
+    auto rand_recv = [=](shared_ptr<pickle::RdmaRecver> recver, shared_ptr<pickle::MemoryRegion> mr) {
         int unique_id = 0;
         vector<shared_ptr<pickle::Event>> events;
         auto [base_addr, num_chunks] = count_aligned_chunks(mr->get_addr(), mr->get_length(), chunk_size);

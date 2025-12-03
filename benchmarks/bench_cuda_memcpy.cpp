@@ -10,7 +10,7 @@ constexpr uint64_t kChunkSize = 64 * 1024 * 1024;
 constexpr uint64_t kBufferSize = 76ull * 1024 * 1024 * 1024;
 
 int main() {
-    void* d_ptr = cuda_util::malloc_gpu_buffer(kBufferSize, 0);
+    void* d_ptr = cuda_util::try_malloc(kBufferSize, 0).unwrap();
 
     auto s_time = std::chrono::high_resolution_clock::now();
     const uint64_t slot_num = kBufferSize / kChunkSize;
@@ -24,6 +24,6 @@ int main() {
     auto e_time = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(e_time - s_time).count();
     printf("Duration: %f ms\n", duration / 1000.0);
-    cuda_util::free_gpu_buffer(d_ptr);
+    cuda_util::try_free(d_ptr).unwrap();
     return 0;
 }
