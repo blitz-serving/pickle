@@ -12,7 +12,6 @@
 #include <string>
 #include <thread>
 
-#include "cuda_util.h"
 #include "executor_common.h"
 #include "spsc.h"
 

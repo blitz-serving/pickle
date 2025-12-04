@@ -6,6 +6,7 @@
 #include <thread>
 #include <utility>
 
+#include "cuda_util.h"
 #include "pickle_logger.h"
 
 namespace pickle {
@@ -241,11 +242,6 @@ void NvlinkRecver::poll() noexcept {
                 .local_event = cmd.event,
             };
 
-            TRACE(
-                "NvlinkRecver::poll() enqueue copy task: unique_id={}, length=0x{:x}",
-                ticket.unique_id,
-                ticket.length
-            );
             PICKLE_ASSERT(this->copy_task_queue_.enqueue(std::move(task)));
         }
 
