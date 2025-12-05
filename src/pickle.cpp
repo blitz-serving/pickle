@@ -2,6 +2,8 @@
 
 #include <utility>
 
+#include "executor_nvlink.h"
+
 namespace pickle {
 
 std::shared_ptr<PickleSender> PickleSender::create_with_rdma(std::shared_ptr<RdmaSender> rdma_sender) {
@@ -22,11 +24,6 @@ PickleSender::PickleSender(std::shared_ptr<NvlinkSender> nvlink_sender) :
     backend_type_(BackendType::kNvlink),
     nvlink_sender_(std::move(nvlink_sender)) {}
 
-void PickleSender::register_memory_region(std::shared_ptr<rdma_util::MemoryRegion> mr) {
-    PICKLE_ASSERT(mr != nullptr, "MemoryRegion should not be null");
-    this->memory_regions_.push_back(std::move(mr));
-}
-
 uint32_t PickleSender::lookup_lkey(uint64_t addr, uint32_t length) const {
     uint64_t end_addr = addr + static_cast<uint64_t>(length);
     PICKLE_ASSERT(end_addr >= addr, "Address overflow when looking up lkey");
@@ -44,16 +41,28 @@ uint32_t PickleSender::lookup_lkey(uint64_t addr, uint32_t length) const {
     return 0;
 }
 
-std::shared_ptr<Event> PickleSender::send(uint32_t unique_id, void* addr, uint32_t length) {
-    PICKLE_ASSERT(addr != nullptr, "addr should not be null");
+NvlinkHandle PickleSender::lookup_ipc_handle(uint64_t addr, uint32_t length) const {
+    uint64_t end_addr = addr + static_cast<uint64_t>(length);
 
-    if (this->backend_type_ == BackendType::kNvlink) {
-        return this->nvlink_sender_->send(unique_id, addr, length);
+    for (const auto& handle : this->nvlink_handles_) {
+        uint64_t base_addr = handle.addr;
+        uint64_t limit = base_addr + handle.length;
+        if (addr >= base_addr && end_addr <= limit) {
+            return handle;
+        }
     }
 
-    uint64_t uaddr = reinterpret_cast<uint64_t>(addr);
-    uint32_t lkey = this->lookup_lkey(uaddr, length);
-    return this->rdma_sender_->send(unique_id, uaddr, length, lkey);
+    PICKLE_ASSERT(false, "No NVLink IPC handle covers addr=0x{:x}, length=0x{:x}", addr, length);
+    return NvlinkHandle {};
+}
+
+std::shared_ptr<Event> PickleSender::send(uint32_t unique_id, uint64_t addr, uint32_t length) {
+    if (this->backend_type_ == BackendType::kNvlink) {
+        auto nvlink_handle = this->lookup_ipc_handle(addr, length);
+        return this->nvlink_sender_->send(unique_id, addr - nvlink_handle.addr, length, nvlink_handle.handle);
+    } else {
+        return this->rdma_sender_->send(unique_id, addr, length, this->lookup_lkey(addr, length));
+    }
 }
 
 void PickleSender::poll() {
@@ -106,16 +115,12 @@ uint32_t PickleRecver::lookup_rkey(uint64_t addr, uint32_t length) const {
     return 0;
 }
 
-std::shared_ptr<Event> PickleRecver::recv(uint32_t unique_id, void* addr, uint32_t length) {
-    PICKLE_ASSERT(addr != nullptr, "addr should not be null");
-
+std::shared_ptr<Event> PickleRecver::recv(uint32_t unique_id, uint64_t addr, uint32_t length) {
     if (this->backend_type_ == BackendType::kNvlink) {
         return this->nvlink_recver_->recv(unique_id, addr, length);
+    } else {
+        return this->rdma_recver_->recv(unique_id, addr, length, this->lookup_rkey(addr, length));
     }
-
-    uint64_t uaddr = reinterpret_cast<uint64_t>(addr);
-    uint32_t rkey = this->lookup_rkey(uaddr, length);
-    return this->rdma_recver_->recv(unique_id, uaddr, length, rkey);
 }
 
 void PickleRecver::poll() {

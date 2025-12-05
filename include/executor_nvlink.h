@@ -6,10 +6,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
-#include <format>
 #include <map>
 #include <memory>
-#include <string>
 #include <thread>
 
 #include "executor_common.h"
@@ -19,24 +17,19 @@ namespace pickle {
 
 // ==================== NVLink 侧控制面数据结构 ====================
 
+struct NvlinkHandle {
+    cudaIpcMemHandle_t handle;
+    uint64_t addr;
+    uint64_t length;
+};
+
 // Sender -> Receiver：描述一次 NVLink 发送的 ticket。
 // 注意：必须是 trivially copyable，才能放进 ipc::SPSCQueue。
 struct alignas(64) NvlinkSendTicket {
+    cudaIpcMemHandle_t handle;
+    uint64_t offset;
     uint32_t unique_id;
-    uint32_t length;  // 以字节为单位
-    int src_device;  // 源 GPU id
-    int dst_device;  // 目标 GPU id
-    cudaIpcMemHandle_t src_handle;  // 源进程导出的 cudaIpcMemHandle
-
-    std::string to_string() const {
-        return std::format(
-            "{{ unique_id: {}, length: 0x{:x}, src_device: {}, dst_device: {} }}",
-            unique_id,
-            length,
-            src_device,
-            dst_device
-        );
-    }
+    uint32_t length;
 };
 
 // Receiver -> Sender：copy 完成之后的 ACK，同样要求 trivially copyable。
@@ -48,8 +41,8 @@ struct alignas(8) NvlinkAck {
 struct NvlinkRecvRequest {
     uint32_t unique_id;
     uint32_t length;
-    void* dst_ptr;  // 目标 GPU buffer 指针（本进程可见）
-    int dst_device;  // 目标 GPU id
+    uint64_t addr;
+    int32_t device;
 };
 
 // 应用侧 recv() 排队到运行时的 command（带 Event）
@@ -69,14 +62,13 @@ struct NvlinkCopyTask {
 // ==================== NVLink Sender：发送方执行器 ====================
 //
 // 角色：
-// - 应用调用 send() -> 把 (unique_id, src_ptr, length) 注册成 cudaIpcMemHandle
-//   -> 推入跨进程 SPSCQueue (send_ticket_queue_) -> 等待 ACK。
+// - 应用调用 send() -> 把 (unique_id, src_ptr, length, handle) 推入跨进程 SPSCQueue
+//   (handle 由应用通过 cudaIpcGetMemHandle 预先获取) -> 等待 ACK。
 // - 后台 poll() 负责从 ack_queue_ 中取出 NvlinkAck，找到对应 Event 并 notify()。
 
 class NvlinkSender {
 private:
-    int src_device_;
-    int dst_device_;
+    int device_;
 
     // Sender -> Receiver：发送 ticket 的 SPSCQueue（本进程为 producer）
     ipc::SPSCQueue<NvlinkSendTicket> send_ticket_queue_;
@@ -87,8 +79,7 @@ private:
     std::map<uint32_t, std::shared_ptr<Event>> pending_send_event_map_;
 
     NvlinkSender(
-        int src_device,
-        int dst_device,
+        int device,
         ipc::SPSCQueue<NvlinkSendTicket>&& send_ticket_queue,
         ipc::SPSCQueue<NvlinkAck>&& ack_queue
     ) noexcept;
@@ -104,13 +95,12 @@ public:
     // 工厂函数：由上层在完成 SPSCQueue 建立后调用。
     static std::shared_ptr<NvlinkSender> create(
         int src_device,
-        int dst_device,
         ipc::SPSCQueue<NvlinkSendTicket>&& send_ticket_queue,
         ipc::SPSCQueue<NvlinkAck>&& ack_queue
     ) noexcept;
 
-    // 应用接口：发起一次 NVLink 发送
-    [[nodiscard]] std::shared_ptr<Event> send(uint32_t unique_id, void* src_ptr, uint32_t length);
+    [[nodiscard]] std::shared_ptr<Event>
+    send(uint32_t unique_id, uint64_t offset, uint32_t length, cudaIpcMemHandle_t handle);
 
     // 后台执行器：从 ACK 队列中取出完成的 unique_id，并通知 Event。
     // SAFETY: !! Not thread-safe, 单线程调用 !!
@@ -128,7 +118,7 @@ public:
 
 class NvlinkCopyExecutor {
 private:
-    int local_device_;
+    int device_;
     Queue<NvlinkCopyTask>& copy_task_queue_;
     ipc::SPSCQueue<NvlinkAck>& ack_queue_;
 
@@ -139,8 +129,9 @@ private:
     void run() noexcept;
 
 public:
-    NvlinkCopyExecutor(int local_device, Queue<NvlinkCopyTask>& copy_task_queue, ipc::SPSCQueue<NvlinkAck>& ack_queue);
+    NvlinkCopyExecutor(int device, Queue<NvlinkCopyTask>& copy_task_queue, ipc::SPSCQueue<NvlinkAck>& ack_queue);
 
+    NvlinkCopyExecutor() = delete;
     NvlinkCopyExecutor(const NvlinkCopyExecutor&) = delete;
     NvlinkCopyExecutor& operator=(const NvlinkCopyExecutor&) = delete;
     NvlinkCopyExecutor(NvlinkCopyExecutor&&) = delete;
@@ -161,7 +152,7 @@ public:
 
 class NvlinkRecver {
 private:
-    int dst_device_;
+    int device_;
 
     // Sender -> Receiver：来自远端的 send ticket（本进程为 consumer）
     ipc::SPSCQueue<NvlinkSendTicket> recv_ticket_queue_;
@@ -179,7 +170,7 @@ private:
     Queue<NvlinkCopyTask> copy_task_queue_;
     NvlinkCopyExecutor copy_executor_;
 
-    NvlinkRecver(int dst_device, ipc::SPSCQueue<NvlinkSendTicket>&& recv_queue, ipc::SPSCQueue<NvlinkAck>&& ack_queue);
+    NvlinkRecver(int device, ipc::SPSCQueue<NvlinkSendTicket>&& recv_queue, ipc::SPSCQueue<NvlinkAck>&& ack_queue);
 
 public:
     NvlinkRecver() = delete;
@@ -194,7 +185,7 @@ public:
     create(int dst_device, ipc::SPSCQueue<NvlinkSendTicket>&& recv_queue, ipc::SPSCQueue<NvlinkAck>&& ack_queue);
 
     // 应用接口：发起一次 NVLink 接收
-    [[nodiscard]] std::shared_ptr<Event> recv(uint32_t unique_id, void* dst_ptr, uint32_t length);
+    [[nodiscard]] std::shared_ptr<Event> recv(uint32_t unique_id, uint64_t addr, uint32_t length);
 
     // 后台执行器：从 SPSCQueue 和本地队列取数据并做匹配，生成 copy task。
     // SAFETY: !! Not thread-safe, 单线程调用 !!

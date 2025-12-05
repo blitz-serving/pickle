@@ -19,9 +19,15 @@ public:
     static std::shared_ptr<PickleSender> create_with_nvlink(std::shared_ptr<NvlinkSender> nvlink_sender);
 
     // 注册一个用于 RDMA lkey 查找的 MemoryRegion
-    void register_memory_region(std::shared_ptr<rdma_util::MemoryRegion> mr);
+    void register_memory_region(std::shared_ptr<rdma_util::MemoryRegion> mr) {
+        this->memory_regions_.push_back(std::move(mr));
+    }
 
-    [[nodiscard]] std::shared_ptr<Event> send(uint32_t unique_id, void* addr, uint32_t length);
+    void register_nvlink_handle(NvlinkHandle handle) {
+        this->nvlink_handles_.push_back(handle);
+    }
+
+    [[nodiscard]] std::shared_ptr<Event> send(uint32_t unique_id, uint64_t addr, uint32_t length);
 
     void poll();
 
@@ -34,11 +40,13 @@ private:
     explicit PickleSender(std::shared_ptr<NvlinkSender> nvlink_sender);
 
     uint32_t lookup_lkey(uint64_t addr, uint32_t length) const;
+    NvlinkHandle lookup_ipc_handle(uint64_t addr, uint32_t length) const;
 
     BackendType backend_type_;
     std::shared_ptr<RdmaSender> rdma_sender_;
     std::shared_ptr<NvlinkSender> nvlink_sender_;
     std::vector<std::shared_ptr<rdma_util::MemoryRegion>> memory_regions_;
+    std::vector<NvlinkHandle> nvlink_handles_;
 };
 
 class PickleRecver {
@@ -52,7 +60,7 @@ public:
     // 注册一个用于 RDMA rkey 查找的 MemoryRegion
     void register_memory_region(std::shared_ptr<rdma_util::MemoryRegion> mr);
 
-    [[nodiscard]] std::shared_ptr<Event> recv(uint32_t unique_id, void* addr, uint32_t length);
+    [[nodiscard]] std::shared_ptr<Event> recv(uint32_t unique_id, uint64_t addr, uint32_t length);
 
     void poll();
 

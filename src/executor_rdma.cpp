@@ -45,16 +45,16 @@ RdmaSender::RdmaSender(unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcep
 
     this->host_recv_buffer_ = MemoryRegion::create(
         this->qp_->get_pd(),
-        shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
-        sizeof(Ticket) * kMagic
+        shared_ptr<void>(new RdmaTicket[kMagic], [](RdmaTicket* p) { delete[] p; }),
+        sizeof(RdmaTicket) * kMagic
     );
     this->recv_buffer_addr_ = uint64_t(this->host_recv_buffer_->get_addr());
     this->recv_buffer_lkey_ = this->host_recv_buffer_->get_lkey();
     for (uint64_t wr_id = 0; wr_id < kMagic; ++wr_id) {
         this->qp_->post_recv(
             wr_id,
-            this->recv_buffer_addr_ + wr_id * sizeof(Ticket),
-            sizeof(Ticket),
+            this->recv_buffer_addr_ + wr_id * sizeof(RdmaTicket),
+            sizeof(RdmaTicket),
             this->recv_buffer_lkey_
         );
     }
@@ -62,12 +62,12 @@ RdmaSender::RdmaSender(unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcep
 
 shared_ptr<Event> RdmaSender::send(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t lkey) {
     auto event = Event::create();
-    auto ticket = Ticket {unique_id, length, lkey, addr};
+    auto ticket = RdmaTicket {unique_id, length, lkey, addr};
     PICKLE_ASSERT(this->send_request_command_queue_.enqueue({.ticket = ticket, .event = event}));
     return event;
 }
 
-void RdmaSender::poll() noexcept(false) {
+void RdmaSender::drain_remote_recv_requests() noexcept(false) {
     int ret = this->qp_->poll_recv_cq_once(kMagic, this->polled_recv_wcs_);
 
     PICKLE_ASSERT(ret >= 0);
@@ -82,19 +82,29 @@ void RdmaSender::poll() noexcept(false) {
 
         );
         auto wr_id = wc.wr_id;
-        Ticket ticket {};
-        memcpy(&ticket, reinterpret_cast<void*>(this->recv_buffer_addr_ + wr_id * sizeof(Ticket)), sizeof(Ticket));
+        RdmaTicket ticket {};
+        memcpy(&ticket, reinterpret_cast<void*>(this->recv_buffer_addr_ + wr_id * sizeof(RdmaTicket)), sizeof(RdmaTicket));
         this->remote_recv_request_queue_.push(ticket);
         this->qp_->post_recv(
             wr_id,
-            this->recv_buffer_addr_ + wr_id * sizeof(Ticket),
-            sizeof(Ticket),
+            this->recv_buffer_addr_ + wr_id * sizeof(RdmaTicket),
+            sizeof(RdmaTicket),
             this->recv_buffer_lkey_
         );
     }
 
+    size_t count = 0;
+    while (!this->remote_recv_request_queue_.empty() && count < kMagic) {
+        auto ticket = std::move(this->remote_recv_request_queue_.front());
+        this->remote_recv_request_queue_.pop();
+        this->pending_remote_recv_request_map_[ticket.unique_id].push(std::move(ticket));
+        ++count;
+    }
+}
+
+void RdmaSender::drain_local_send_requests() {
     // Received from send request
-    array<Command, kMagic> commands;
+    array<RdmaCommand, kMagic> commands;
     uint64_t count_dequeued = this->send_request_command_queue_.try_dequeue_bulk(commands.begin(), kMagic);
     for (uint64_t i = 0; i < count_dequeued; ++i) {
         auto command = std::move(commands[i]);
@@ -102,16 +112,9 @@ void RdmaSender::poll() noexcept(false) {
         this->pending_local_send_request_map_[unique_id].push(std::move(command.ticket));
         this->pending_local_send_event_map_[unique_id].push(std::move(command.event));
     }
+}
 
-    // Received from thread_post_recv
-    size_t count = 0;
-    while (!remote_recv_request_queue_.empty() && count < kMagic) {
-        auto ticket = std::move(remote_recv_request_queue_.front());
-        remote_recv_request_queue_.pop();
-        pending_remote_recv_request_map_[ticket.unique_id].push(std::move(ticket));
-        ++count;
-    }
-
+void RdmaSender::build_and_post() {
     uint64_t wr_list_start = this->wr_occupied_;
     uint16_t doorbell_length = 0;
     // Execute remote write args
@@ -206,8 +209,10 @@ void RdmaSender::poll() noexcept(false) {
         this->qp_->post_send_wrs(&(this->send_wr_list_[wr_list_start]));
         TRACE("pickle::PickleSender::poll() posted {} work requests", this->wr_occupied_ - wr_list_start);
     }
+}
 
-    ret = this->qp_->poll_send_cq_once(kMagic, this->polled_send_wcs_);
+void RdmaSender::handle_completions() noexcept(false) {
+    int ret = this->qp_->poll_send_cq_once(kMagic, this->polled_send_wcs_);
     PICKLE_ASSERT(ret >= 0, "Failed to poll send CQ");
     if (ret > 0) {
         for (const auto& wc : this->polled_send_wcs_) {
@@ -239,6 +244,13 @@ void RdmaSender::poll() noexcept(false) {
     }
 }
 
+void RdmaSender::poll() noexcept(false) {
+    this->drain_remote_recv_requests();
+    this->drain_local_send_requests();
+    this->build_and_post();
+    this->handle_completions();
+}
+
 RdmaRecver::RdmaRecver(unique_ptr<RcQueuePair> qp, shared_ptr<RdmaFlusher> flusher) noexcept(false) :
     count_pending_requests_(0),
     qp_(std::move(qp)),
@@ -247,16 +259,16 @@ RdmaRecver::RdmaRecver(unique_ptr<RcQueuePair> qp, shared_ptr<RdmaFlusher> flush
     flusher_(std::move(flusher)) {
     this->host_send_buffer_ = MemoryRegion::create(
         this->qp_->get_pd(),
-        shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
-        sizeof(Ticket) * kMagic
+        shared_ptr<void>(new RdmaTicket[kMagic], [](RdmaTicket* p) { delete[] p; }),
+        sizeof(RdmaTicket) * kMagic
     );
     this->send_buffer_addr_ = uint64_t(this->host_send_buffer_->get_addr());
     this->send_buffer_lkey_ = this->host_send_buffer_->get_lkey();
 
     this->host_recv_buffer_ = MemoryRegion::create(
         this->qp_->get_pd(),
-        shared_ptr<void>(new Ticket[kMagic], [](Ticket* p) { delete[] p; }),
-        sizeof(Ticket) * kMagic
+        shared_ptr<void>(new RdmaTicket[kMagic], [](RdmaTicket* p) { delete[] p; }),
+        sizeof(RdmaTicket) * kMagic
     );
     this->recv_buffer_addr_ = uint64_t(this->host_recv_buffer_->get_addr());
     this->recv_buffer_lkey_ = this->host_recv_buffer_->get_lkey();
@@ -272,13 +284,13 @@ shared_ptr<RdmaRecver> RdmaRecver::create(unique_ptr<RcQueuePair> qp, shared_ptr
 
 shared_ptr<Event> RdmaRecver::recv(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t rkey) {
     auto event = Event::create();
-    auto ticket = Ticket {unique_id, length, rkey, addr};
+    auto ticket = RdmaTicket {unique_id, length, rkey, addr};
     PICKLE_ASSERT(this->recv_request_command_queue_.enqueue({.ticket = ticket, .event = event}));
     return event;
 }
 
 void RdmaRecver::poll() noexcept(false) {
-    array<Command, kMagic> commands;
+    array<RdmaCommand, kMagic> commands;
     uint64_t count_dequeued = this->recv_request_command_queue_.try_dequeue_bulk(commands.begin(), kMagic);
     for (uint64_t i = 0; i < count_dequeued; ++i) {
         auto& command = commands[i];
@@ -292,12 +304,12 @@ void RdmaRecver::poll() noexcept(false) {
         this->free_slots.pop();
         auto ticket = this->pending_local_recv_request_queue_.front();
         this->pending_local_recv_request_queue_.pop();
-        reinterpret_cast<Ticket*>(this->send_buffer_addr_)[wr_id] = ticket;
-        this->qp_->post_recv(wr_id, this->recv_buffer_addr_ + wr_id * sizeof(Ticket), 0, this->recv_buffer_lkey_);
+        reinterpret_cast<RdmaTicket*>(this->send_buffer_addr_)[wr_id] = ticket;
+        this->qp_->post_recv(wr_id, this->recv_buffer_addr_ + wr_id * sizeof(RdmaTicket), 0, this->recv_buffer_lkey_);
         this->qp_->post_send_send(
             wr_id,
-            this->send_buffer_addr_ + wr_id * sizeof(Ticket),
-            sizeof(Ticket),
+            this->send_buffer_addr_ + wr_id * sizeof(RdmaTicket),
+            sizeof(RdmaTicket),
             this->send_buffer_lkey_,
             true
         );

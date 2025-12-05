@@ -22,7 +22,7 @@ using ::rdma_util::MemoryRegion;
 using ::rdma_util::ProtectionDomain;
 using ::rdma_util::RcQueuePair;
 
-struct alignas(32) Ticket {
+struct alignas(32) RdmaTicket {
     uint32_t unique_id;
     uint32_t length;
     uint32_t key;
@@ -33,8 +33,8 @@ struct alignas(32) Ticket {
     }
 };
 
-struct Command {
-    Ticket ticket;
+struct RdmaCommand {
+    RdmaTicket ticket;
     shared_ptr<Event> event;
 };
 
@@ -42,10 +42,10 @@ class RdmaSender {
 private:
     uint64_t packet_size_;
 
-    queue<Ticket> remote_recv_request_queue_;
-    Queue<Command> send_request_command_queue_;
-    MultiMap<Ticket> pending_remote_recv_request_map_;
-    MultiMap<Ticket> pending_local_send_request_map_;
+    queue<RdmaTicket> remote_recv_request_queue_;
+    Queue<RdmaCommand> send_request_command_queue_;
+    MultiMap<RdmaTicket> pending_remote_recv_request_map_;
+    MultiMap<RdmaTicket> pending_local_send_request_map_;
     MultiMap<shared_ptr<Event>> pending_local_send_event_map_;
 
     shared_ptr<RcQueuePair> qp_;
@@ -59,6 +59,11 @@ private:
     unique_ptr<MemoryRegion> host_recv_buffer_;
     uint64_t recv_buffer_addr_;
     uint32_t recv_buffer_lkey_;
+
+    void drain_remote_recv_requests();
+    void drain_local_send_requests();
+    void build_and_post();
+    void handle_completions();
 
     RdmaSender(unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false);
 
@@ -125,10 +130,10 @@ public:
 class RdmaRecver {
 private:
     uint64_t count_pending_requests_;
-    queue<Ticket> pending_local_recv_request_queue_;
+    queue<RdmaTicket> pending_local_recv_request_queue_;
     queue<uint64_t> free_slots;
-    Queue<Command> recv_request_command_queue_;
-    MultiMap<Command> pending_local_recv_request_map_;
+    Queue<RdmaCommand> recv_request_command_queue_;
+    MultiMap<RdmaCommand> pending_local_recv_request_map_;
 
     shared_ptr<RcQueuePair> qp_;
     vector<ibv_wc> polled_send_wcs_;

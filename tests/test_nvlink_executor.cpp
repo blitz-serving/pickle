@@ -60,11 +60,11 @@ int run_child_recver() {
 
     // 4. 在 GPU1 上分配接收 buffer
     constexpr int N = 16;
-    int* dst = static_cast<int*>(cuda_util::try_malloc(N * sizeof(int), GPU_RECVER).unwrap());
+    auto dst = cuda_util::try_malloc(N * sizeof(int), GPU_RECVER).unwrap();
 
     uint32_t uid = 1234;
 
-    auto ev_recv = recver->recv(uid, dst, static_cast<uint32_t>(N * sizeof(int)));
+    auto ev_recv = recver->recv(uid, reinterpret_cast<uint64_t>(dst), static_cast<uint32_t>(N * sizeof(int)));
 
     // 5. 后台轮询匹配 + 触发 copy 任务
     while (!ev_recv->is_notified()) {
@@ -121,7 +121,6 @@ int run_parent_sender(pid_t child_pid) {
     // 2. 创建 NvlinkSender
     auto sender = NvlinkSender::create(
         GPU_SENDER,
-        GPU_RECVER,
         ipc::SPSCQueue<NvlinkSendTicket>::create_producer(TICKET_QUEUE_NAME, QUEUE_BYTES_TICKET).unwrap(),
         ipc::SPSCQueue<NvlinkAck>::create_consumer(ACK_QUEUE_NAME, QUEUE_BYTES_ACK).unwrap()
     );
@@ -135,11 +134,15 @@ int run_parent_sender(pid_t child_pid) {
         host_data[i] = i * 10;
     }
     CUDA_CHECK(cudaMemcpy(src, host_data, N * sizeof(int), cudaMemcpyHostToDevice));
+    cudaIpcMemHandle_t handle {};
+    CUDA_CHECK(cudaIpcGetMemHandle(&handle, src));
 
     uint32_t uid = 1234;
 
     // 5. 发起 NVLink 发送
-    auto ev_send = sender->send(uid, src, static_cast<uint32_t>(N * sizeof(int)));
+    // The sender API expects an offset from the IPC handle base pointer; the buffer
+    // starts at the base, so offset should be 0 instead of passing the raw pointer.
+    auto ev_send = sender->send(uid, /*offset=*/0, static_cast<uint32_t>(N * sizeof(int)), handle);
 
     // 6. 轮询 ACK，直到发送侧事件完成
     while (!ev_send->is_notified()) {
