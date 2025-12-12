@@ -3,7 +3,6 @@
 #include <emmintrin.h>
 
 #include <array>
-#include <thread>
 #include <utility>
 
 #include "cuda_util.h"
@@ -72,84 +71,6 @@ void NvlinkSender::poll() noexcept {
     }
 }
 
-// ==================== NvlinkCopyExecutor ====================
-
-NvlinkCopyExecutor::NvlinkCopyExecutor(
-    int device,
-    Queue<NvlinkCopyTask>& copy_task_queue,
-    ipc::SPSCQueue<NvlinkAck>& ack_queue
-) :
-    device_(device),
-    copy_task_queue_(copy_task_queue),
-    ack_queue_(ack_queue) {
-    // 后台线程启动
-    this->worker_ = std::thread([this]() { this->run(); });
-}
-
-NvlinkCopyExecutor::~NvlinkCopyExecutor() {
-    this->stop_flag_.store(true, std::memory_order_release);
-    if (this->worker_.joinable()) {
-        this->worker_.join();
-    }
-}
-
-void NvlinkCopyExecutor::run() noexcept {
-    // 绑定本线程的 CUDA context
-    CUDA_CHECK(cudaSetDevice(this->device_));
-    CUDA_CHECK(cudaStreamCreateWithFlags(&this->stream_, cudaStreamNonBlocking));
-
-    cudaEvent_t completion_event;
-    CUDA_CHECK(cudaEventCreateWithFlags(&completion_event, cudaEventDisableTiming));
-
-    while (!this->stop_flag_.load(std::memory_order_acquire)) {
-        NvlinkCopyTask task;
-        if (!this->copy_task_queue_.try_dequeue(task)) {
-            // 没有任务，稍微睡一下，避免忙等
-            _mm_pause();
-            continue;
-        }
-
-        const auto& ticket = task.remote_ticket;
-        const auto& request = task.local_request;
-
-        PICKLE_ASSERT(request.device == this->device_);
-
-        // 打开远端的 cudaIpcMemHandle，获得本进程可见的 device pointer。
-        void* remote_base_ptr = nullptr;
-        CUDA_CHECK(cudaIpcOpenMemHandle(&remote_base_ptr, ticket.handle, cudaIpcMemLazyEnablePeerAccess));
-
-        uint64_t raddr = reinterpret_cast<uint64_t>(remote_base_ptr) + ticket.offset;
-        uint64_t laddr = reinterpret_cast<uint64_t>(request.addr);
-        // 在本 GPU 的 copy engine 上做 DeviceToDevice 复制（SM-free）
-        CUDA_CHECK(cudaMemcpyAsync(
-            reinterpret_cast<void*>(laddr),
-            reinterpret_cast<void*>(raddr),
-            ticket.length,
-            cudaMemcpyDeviceToDevice,
-            this->stream_
-        ));
-
-        // 通过 cudaEvent 等待这一批 copy 完成。
-        CUDA_CHECK(cudaEventRecord(completion_event, this->stream_));
-        CUDA_CHECK(cudaEventSynchronize(completion_event));
-
-        // 关闭 Ipc handle
-        CUDA_CHECK(cudaIpcCloseMemHandle(remote_base_ptr));
-
-        // 通知本地应用：对应的 recv() 已经完成
-        if (task.local_event) {
-            task.local_event->notify();
-        }
-
-        // 通过 ACK 队列告诉远端 Sender：unique_id 已经完成
-        NvlinkAck ack {ticket.unique_id};
-        this->ack_queue_.try_push(ack).unwrap();
-    }
-
-    CUDA_CHECK(cudaEventDestroy(completion_event));
-    CUDA_CHECK(cudaStreamDestroy(this->stream_));
-}
-
 // ==================== NvlinkRecver ====================
 
 NvlinkRecver::NvlinkRecver(
@@ -159,9 +80,14 @@ NvlinkRecver::NvlinkRecver(
 ) :
     device_(device),
     recv_ticket_queue_(std::move(recv_queue)),
-    ack_queue_(std::move(ack_queue)),
-    copy_task_queue_(),
-    copy_executor_(device_, copy_task_queue_, this->ack_queue_) {}
+    ack_queue_(std::move(ack_queue)) {}
+
+NvlinkRecver::~NvlinkRecver() {
+    if (this->stream_ != nullptr) {
+        this->cleanup_inflight();
+        CUDA_CHECK(cudaStreamDestroy(this->stream_));
+    }
+}
 
 std::shared_ptr<NvlinkRecver>
 NvlinkRecver::create(int device, ipc::SPSCQueue<NvlinkSendTicket>&& recv_queue, ipc::SPSCQueue<NvlinkAck>&& ack_queue) {
@@ -181,6 +107,77 @@ std::shared_ptr<Event> NvlinkRecver::recv(uint32_t unique_id, uint64_t addr, uin
     PICKLE_ASSERT(this->recv_request_command_queue_.enqueue(std::move(cmd)));
 
     return event;
+}
+
+void NvlinkRecver::ensure_stream() {
+    if (this->stream_ != nullptr) {
+        return;
+    }
+    CUDA_CHECK(cudaSetDevice(this->device_));
+    CUDA_CHECK(cudaStreamCreateWithFlags(&this->stream_, cudaStreamNonBlocking));
+}
+
+void NvlinkRecver::start_copy(const NvlinkSendTicket& ticket, NvlinkRecvCommand&& cmd) {
+    this->ensure_stream();
+
+    PICKLE_ASSERT(cmd.request.device == this->device_);
+
+    // 打开远端的 cudaIpcMemHandle，获得本进程可见的 device pointer。
+    void* remote_base_ptr = nullptr;
+    CUDA_CHECK(cudaIpcOpenMemHandle(&remote_base_ptr, ticket.handle, cudaIpcMemLazyEnablePeerAccess));
+
+    uint64_t raddr = reinterpret_cast<uint64_t>(remote_base_ptr) + ticket.offset;
+    uint64_t laddr = reinterpret_cast<uint64_t>(cmd.request.addr);
+    CUDA_CHECK(cudaMemcpyAsync(
+        reinterpret_cast<void*>(laddr),
+        reinterpret_cast<void*>(raddr),
+        ticket.length,
+        cudaMemcpyDeviceToDevice,
+        this->stream_
+    ));
+
+    cudaEvent_t completion_event;
+    CUDA_CHECK(cudaEventCreateWithFlags(&completion_event, cudaEventDisableTiming));
+    CUDA_CHECK(cudaEventRecord(completion_event, this->stream_));
+
+    this->inflight_copies_.push_back(
+        InflightCopy {
+            .cuda_event = completion_event,
+            .pickle_event = cmd.event,
+            .remote_base_ptr = remote_base_ptr,
+            .unique_id = ticket.unique_id,
+        }
+    );
+}
+
+void NvlinkRecver::check_inflight_copies() {
+    while (!this->inflight_copies_.empty()) {
+        auto& front = this->inflight_copies_.front();
+        auto status = cudaEventQuery(front.cuda_event);
+        if (status == cudaErrorNotReady) {
+            break;
+        }
+
+        CUDA_CHECK(status);
+        CUDA_CHECK(cudaEventDestroy(front.cuda_event));
+        CUDA_CHECK(cudaIpcCloseMemHandle(front.remote_base_ptr));
+
+        if (front.pickle_event) {
+            front.pickle_event->notify();
+        }
+
+        NvlinkAck ack {front.unique_id};
+        this->ack_queue_.try_push(ack).unwrap();
+        this->inflight_copies_.pop_front();
+    }
+}
+
+void NvlinkRecver::cleanup_inflight() {
+    for (auto& inflight : this->inflight_copies_) {
+        cudaEventDestroy(inflight.cuda_event);
+        cudaIpcCloseMemHandle(inflight.remote_base_ptr);
+    }
+    this->inflight_copies_.clear();
 }
 
 void NvlinkRecver::poll() noexcept {
@@ -219,24 +216,17 @@ void NvlinkRecver::poll() noexcept {
         while (!remote_queue.empty() && !local_queue.empty()) {
             NvlinkSendTicket ticket = std::move(remote_queue.front());
             remote_queue.pop();
-
-            NvlinkRecvCommand cmd = std::move(local_queue.front());
+            NvlinkRecvCommand command = std::move(local_queue.front());
             local_queue.pop();
 
             PICKLE_ASSERT(
-                ticket.length == cmd.request.length,
+                ticket.length == command.request.length,
                 "NvlinkRecver::poll() length mismatch: send_length={}, recv_length={}",
                 ticket.length,
-                cmd.request.length
+                command.request.length
             );
 
-            PICKLE_ASSERT(this->copy_task_queue_.enqueue(
-                NvlinkCopyTask {
-                    .remote_ticket = ticket,
-                    .local_request = cmd.request,
-                    .local_event = cmd.event,
-                }
-            ));
+            this->start_copy(ticket, std::move(command));
         }
 
         // 清理空队列，避免 map 无限增长
@@ -250,6 +240,9 @@ void NvlinkRecver::poll() noexcept {
             this->pending_local_recv_map_.erase(local_it);
         }
     }
+
+    // 4. 检查 in-flight copy 的完成状态
+    this->check_inflight_copies();
 }
 
 }  // namespace pickle

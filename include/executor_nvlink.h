@@ -2,13 +2,12 @@
 
 #include <cuda_runtime.h>
 
-#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <map>
 #include <memory>
-#include <thread>
 
 #include "executor_common.h"
 #include "spsc.h"
@@ -49,14 +48,6 @@ struct NvlinkRecvRequest {
 struct NvlinkRecvCommand {
     NvlinkRecvRequest request;
     std::shared_ptr<Event> event;
-};
-
-// 由 Receiver 的 poll() 生成的 copy task，投递到后台 copy 线程。
-// 这里只保存本进程需要的信息：remote ticket + local request + 本地 Event。
-struct NvlinkCopyTask {
-    NvlinkSendTicket remote_ticket;
-    NvlinkRecvRequest local_request;
-    std::shared_ptr<Event> local_event;
 };
 
 // ==================== NVLink Sender：发送方执行器 ====================
@@ -107,39 +98,6 @@ public:
     void poll() noexcept;
 };
 
-// ==================== NVLink Copy Executor：后台拷贝线程 ====================
-//
-// 角色：
-// - 绑定到某个 GPU（local_device_） 的 CUDA context；
-// - 从 copy_task_queue_ 中取出 NvlinkCopyTask；
-// - 调用 cudaIpcOpenMemHandle 将 remote_ticket.src_handle 映射为当前进程可见的 ptr；
-// - 使用 local_device_ 上的 copy engine 做 cudaMemcpyAsync(local_dst <- remote_src)；
-// - 等待 copy 完成后，通知本地 Event，并通过 ack_queue_ 发送 ACK。
-
-class NvlinkCopyExecutor {
-private:
-    int device_;
-    Queue<NvlinkCopyTask>& copy_task_queue_;
-    ipc::SPSCQueue<NvlinkAck>& ack_queue_;
-
-    std::atomic<bool> stop_flag_ {false};
-    std::thread worker_;
-    cudaStream_t stream_ {nullptr};
-
-    void run() noexcept;
-
-public:
-    NvlinkCopyExecutor(int device, Queue<NvlinkCopyTask>& copy_task_queue, ipc::SPSCQueue<NvlinkAck>& ack_queue);
-
-    NvlinkCopyExecutor() = delete;
-    NvlinkCopyExecutor(const NvlinkCopyExecutor&) = delete;
-    NvlinkCopyExecutor& operator=(const NvlinkCopyExecutor&) = delete;
-    NvlinkCopyExecutor(NvlinkCopyExecutor&&) = delete;
-    NvlinkCopyExecutor& operator=(NvlinkCopyExecutor&&) = delete;
-
-    ~NvlinkCopyExecutor();
-};
-
 // ==================== NVLink Receiver：接收方执行器 ====================
 //
 // 角色：
@@ -166,9 +124,20 @@ private:
     MultiMap<NvlinkSendTicket> pending_remote_send_map_;
     MultiMap<NvlinkRecvCommand> pending_local_recv_map_;
 
-    // copy task 队列 & 后台拷贝执行器
-    Queue<NvlinkCopyTask> copy_task_queue_;
-    NvlinkCopyExecutor copy_executor_;
+    struct InflightCopy {
+        cudaEvent_t cuda_event {nullptr};
+        std::shared_ptr<Event> pickle_event;
+        void* remote_base_ptr {nullptr};
+        uint32_t unique_id {0};
+    };
+
+    cudaStream_t stream_ {nullptr};
+    std::deque<InflightCopy> inflight_copies_;
+
+    void start_copy(const NvlinkSendTicket& ticket, NvlinkRecvCommand&& command);
+    void check_inflight_copies();
+    void ensure_stream();
+    void cleanup_inflight();
 
     NvlinkRecver(int device, ipc::SPSCQueue<NvlinkSendTicket>&& recv_queue, ipc::SPSCQueue<NvlinkAck>&& ack_queue);
 
@@ -179,7 +148,7 @@ public:
     NvlinkRecver(NvlinkRecver&&) = delete;
     NvlinkRecver& operator=(NvlinkRecver&&) = delete;
 
-    ~NvlinkRecver() = default;
+    ~NvlinkRecver();
 
     static std::shared_ptr<NvlinkRecver>
     create(int dst_device, ipc::SPSCQueue<NvlinkSendTicket>&& recv_queue, ipc::SPSCQueue<NvlinkAck>&& ack_queue);
