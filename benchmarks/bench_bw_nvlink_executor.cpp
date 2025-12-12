@@ -169,10 +169,7 @@ static BenchConfig parse_args(int argc, char** argv) {
 }
 
 static void poll_pause(bool busy_poll) {
-    if (busy_poll) {
-        // Yield to reduce contention a bit while still being effectively busy.
-        std::this_thread::yield();
-    } else {
+    if (!busy_poll) {
         std::this_thread::sleep_for(50us);
     }
 }
@@ -241,7 +238,7 @@ int run_child_recver(const BenchConfig& cfg, int child_to_parent_fd, int parent_
 
     for (uint32_t si = 0; si < cfg.sizes_bytes.size(); ++si) {
         const uint32_t total = static_cast<uint32_t>(cfg.warmup_iters + cfg.iters);
-        const uint32_t bytes = static_cast<uint32_t>(cfg.sizes_bytes[si]);
+        const uint64_t bytes = static_cast<uint64_t>(cfg.sizes_bytes[si]);
 
         std::vector<decltype(recver->recv(uid_base, 0, 0))> evs;
         evs.reserve(total);
@@ -355,7 +352,7 @@ int run_parent_sender(const BenchConfig& cfg, pid_t child_pid, int child_to_pare
             return 1;
         }
 
-        const uint32_t bytes = static_cast<uint32_t>(cfg.sizes_bytes[si]);
+        const uint64_t bytes = static_cast<uint64_t>(cfg.sizes_bytes[si]);
 
         // Warmup
         for (int i = 0; i < cfg.warmup_iters; ++i) {

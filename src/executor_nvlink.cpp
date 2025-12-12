@@ -30,7 +30,7 @@ std::shared_ptr<NvlinkSender> NvlinkSender::create(
 }
 
 std::shared_ptr<Event>
-NvlinkSender::send(uint32_t unique_id, uint64_t offset, uint32_t length, cudaIpcMemHandle_t handle) {
+NvlinkSender::send(uint32_t unique_id, uint64_t offset, uint64_t length, cudaIpcMemHandle_t handle) {
     auto event = Event::create();
 
     NvlinkSendTicket ticket {};
@@ -94,7 +94,7 @@ NvlinkRecver::create(int device, ipc::SPSCQueue<NvlinkSendTicket>&& recv_queue, 
     return std::shared_ptr<NvlinkRecver>(new NvlinkRecver(device, std::move(recv_queue), std::move(ack_queue)));
 }
 
-std::shared_ptr<Event> NvlinkRecver::recv(uint32_t unique_id, uint64_t addr, uint32_t length) {
+std::shared_ptr<Event> NvlinkRecver::recv(uint32_t unique_id, uint64_t addr, uint64_t length) {
     auto event = Event::create();
 
     NvlinkRecvRequest req {};
@@ -131,7 +131,7 @@ void NvlinkRecver::start_copy(const NvlinkSendTicket& ticket, NvlinkRecvCommand&
     CUDA_CHECK(cudaMemcpyAsync(
         reinterpret_cast<void*>(laddr),
         reinterpret_cast<void*>(raddr),
-        ticket.length,
+        static_cast<size_t>(ticket.length),
         cudaMemcpyDeviceToDevice,
         this->stream_
     ));

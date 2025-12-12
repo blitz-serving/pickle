@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -60,9 +61,9 @@ RdmaSender::RdmaSender(unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcep
     }
 }
 
-shared_ptr<Event> RdmaSender::send(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t lkey) {
+shared_ptr<Event> RdmaSender::send(uint32_t unique_id, uint64_t addr, uint64_t length, uint32_t lkey) {
     auto event = Event::create();
-    auto ticket = RdmaTicket {unique_id, length, lkey, addr};
+    auto ticket = RdmaTicket {.addr = addr, .length = length, .unique_id = unique_id, .key = lkey};
     PICKLE_ASSERT(this->send_request_command_queue_.enqueue({.ticket = ticket, .event = event}));
     return event;
 }
@@ -82,8 +83,7 @@ void RdmaSender::drain_remote_recv_requests() noexcept(false) {
 
         );
         auto wr_id = wc.wr_id;
-        RdmaTicket ticket {};
-        memcpy(&ticket, reinterpret_cast<void*>(this->recv_buffer_addr_ + wr_id * sizeof(RdmaTicket)), sizeof(RdmaTicket));
+        RdmaTicket ticket = reinterpret_cast<RdmaTicket*>(this->recv_buffer_addr_)[wr_id];
         this->remote_recv_request_queue_.push(ticket);
         this->qp_->post_recv(
             wr_id,
@@ -115,6 +115,7 @@ void RdmaSender::drain_local_send_requests() {
 }
 
 void RdmaSender::build_and_post() {
+    PICKLE_ASSERT(this->packet_size_ <= std::numeric_limits<uint32_t>::max(), "packet_size must fit in uint32_t");
     uint64_t wr_list_start = this->wr_occupied_;
     uint16_t doorbell_length = 0;
     // Execute remote write args
@@ -139,23 +140,28 @@ void RdmaSender::build_and_post() {
             uint64_t wr_list_index = this->wr_occupied_++;
 
             uint64_t raddr = remote_recv_request.addr;
-            uint32_t rlength = remote_recv_request.length;
+            uint64_t rlength = remote_recv_request.length;
             uint32_t rkey = remote_recv_request.key;
 
             uint64_t laddr = local_send_request.addr;
-            uint32_t llength = local_send_request.length;
+            uint64_t llength = local_send_request.length;
             uint32_t lkey = local_send_request.key;
 
             PICKLE_ASSERT(rlength == llength, "Length mismatch");
 
-            uint32_t write_size;
+            uint64_t chunk_size = (llength <= this->packet_size_) ? llength : this->packet_size_;
+            PICKLE_ASSERT(
+                chunk_size <= std::numeric_limits<uint32_t>::max(),
+                "Chunk size {} exceeds SGE length limit",
+                chunk_size
+            );
+            uint32_t write_size = static_cast<uint32_t>(chunk_size);
             ibv_wr_opcode opcode;
             wrid_t wr_id;
 
             if (llength <= this->packet_size_) {
                 // The last packet of the request
                 opcode = ibv_wr_opcode::IBV_WR_RDMA_WRITE_WITH_IMM;
-                write_size = llength;
                 wr_id.wr_id.doorbell_length = doorbell_length;
                 wr_id.wr_id.unique_id = unique_id;
                 wr_id.wr_id.request_finished = true;
@@ -164,14 +170,13 @@ void RdmaSender::build_and_post() {
             } else {
                 // The intermediate packet of the request
                 opcode = ibv_wr_opcode::IBV_WR_RDMA_WRITE;
-                write_size = this->packet_size_;
                 wr_id.wr_id.doorbell_length = doorbell_length;
                 wr_id.wr_id.unique_id = unique_id;
                 wr_id.wr_id.request_finished = false;
-                remote_recv_request.addr += this->packet_size_;
-                remote_recv_request.length -= this->packet_size_;
-                local_send_request.addr += this->packet_size_;
-                local_send_request.length -= this->packet_size_;
+                remote_recv_request.addr += chunk_size;
+                remote_recv_request.length -= chunk_size;
+                local_send_request.addr += chunk_size;
+                local_send_request.length -= chunk_size;
             }
 
             this->send_sge_list_[wr_list_index] = {};
@@ -282,9 +287,9 @@ shared_ptr<RdmaRecver> RdmaRecver::create(unique_ptr<RcQueuePair> qp, shared_ptr
     return shared_ptr<RdmaRecver>(new RdmaRecver(std::move(qp), std::move(flusher)));
 }
 
-shared_ptr<Event> RdmaRecver::recv(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t rkey) {
+shared_ptr<Event> RdmaRecver::recv(uint32_t unique_id, uint64_t addr, uint64_t length, uint32_t rkey) {
     auto event = Event::create();
-    auto ticket = RdmaTicket {unique_id, length, rkey, addr};
+    auto ticket = RdmaTicket {.addr = addr, .length = length, .unique_id = unique_id, .key = rkey};
     PICKLE_ASSERT(this->recv_request_command_queue_.enqueue({.ticket = ticket, .event = event}));
     return event;
 }

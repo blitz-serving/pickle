@@ -23,13 +23,19 @@ using ::rdma_util::ProtectionDomain;
 using ::rdma_util::RcQueuePair;
 
 struct alignas(32) RdmaTicket {
-    uint32_t unique_id;
-    uint32_t length;
-    uint32_t key;
     uint64_t addr;
+    uint64_t length;
+    uint32_t unique_id;
+    uint32_t key;
 
     string to_string() const {
-        return std::format("{{ unique_id: {}, key: {}, length: 0x{:x}, addr: 0x{:x} }}", unique_id, key, length, addr);
+        return std::format(
+            "RdmaTicket{{addr=0x{:016x}, length={}, unique_id={}, key=0x{:08x}}}",
+            this->addr,
+            this->length,
+            this->unique_id,
+            this->key
+        );
     }
 };
 
@@ -77,7 +83,7 @@ public:
 
     static shared_ptr<RdmaSender> create(unique_ptr<RcQueuePair> qp, uint64_t packet_size = 256 * 1024) noexcept(false);
 
-    [[nodiscard]] shared_ptr<Event> send(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t lkey);
+    [[nodiscard]] shared_ptr<Event> send(uint32_t unique_id, uint64_t addr, uint64_t length, uint32_t lkey);
 
     /**
      * @brief The executor of the PickleSender.
@@ -162,7 +168,7 @@ public:
     static shared_ptr<RdmaRecver>
     create(unique_ptr<RcQueuePair> qp, shared_ptr<RdmaFlusher> flusher = nullptr) noexcept(false);
 
-    [[nodiscard]] shared_ptr<Event> recv(uint32_t unique_id, uint64_t addr, uint32_t length, uint32_t rkey);
+    [[nodiscard]] shared_ptr<Event> recv(uint32_t unique_id, uint64_t addr, uint64_t length, uint32_t rkey);
 
     /**
      * @brief The executor of the PickleRecver

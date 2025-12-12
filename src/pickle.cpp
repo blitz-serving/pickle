@@ -24,8 +24,8 @@ PickleSender::PickleSender(std::shared_ptr<NvlinkSender> nvlink_sender) :
     backend_type_(BackendType::kNvlink),
     nvlink_sender_(std::move(nvlink_sender)) {}
 
-uint32_t PickleSender::lookup_lkey(uint64_t addr, uint32_t length) const {
-    uint64_t end_addr = addr + static_cast<uint64_t>(length);
+uint32_t PickleSender::lookup_lkey(uint64_t addr, uint64_t length) const {
+    uint64_t end_addr = addr + length;
     PICKLE_ASSERT(end_addr >= addr, "Address overflow when looking up lkey");
 
     for (const auto& mr : this->memory_regions_) {
@@ -41,8 +41,8 @@ uint32_t PickleSender::lookup_lkey(uint64_t addr, uint32_t length) const {
     return 0;
 }
 
-NvlinkHandle PickleSender::lookup_ipc_handle(uint64_t addr, uint32_t length) const {
-    uint64_t end_addr = addr + static_cast<uint64_t>(length);
+NvlinkHandle PickleSender::lookup_ipc_handle(uint64_t addr, uint64_t length) const {
+    uint64_t end_addr = addr + length;
 
     for (const auto& handle : this->nvlink_handles_) {
         uint64_t base_addr = handle.addr;
@@ -56,7 +56,7 @@ NvlinkHandle PickleSender::lookup_ipc_handle(uint64_t addr, uint32_t length) con
     return NvlinkHandle {};
 }
 
-std::shared_ptr<Event> PickleSender::send(uint32_t unique_id, uint64_t addr, uint32_t length) {
+std::shared_ptr<Event> PickleSender::send(uint32_t unique_id, uint64_t addr, uint64_t length) {
     if (this->backend_type_ == BackendType::kNvlink) {
         auto nvlink_handle = this->lookup_ipc_handle(addr, length);
         return this->nvlink_sender_->send(unique_id, addr - nvlink_handle.addr, length, nvlink_handle.handle);
@@ -98,8 +98,8 @@ void PickleRecver::register_memory_region(std::shared_ptr<rdma_util::MemoryRegio
     this->memory_regions_.push_back(std::move(mr));
 }
 
-uint32_t PickleRecver::lookup_rkey(uint64_t addr, uint32_t length) const {
-    uint64_t end_addr = addr + static_cast<uint64_t>(length);
+uint32_t PickleRecver::lookup_rkey(uint64_t addr, uint64_t length) const {
+    uint64_t end_addr = addr + length;
     PICKLE_ASSERT(end_addr >= addr, "Address overflow when looking up rkey");
 
     for (const auto& mr : this->memory_regions_) {
@@ -115,7 +115,7 @@ uint32_t PickleRecver::lookup_rkey(uint64_t addr, uint32_t length) const {
     return 0;
 }
 
-std::shared_ptr<Event> PickleRecver::recv(uint32_t unique_id, uint64_t addr, uint32_t length) {
+std::shared_ptr<Event> PickleRecver::recv(uint32_t unique_id, uint64_t addr, uint64_t length) {
     if (this->backend_type_ == BackendType::kNvlink) {
         return this->nvlink_recver_->recv(unique_id, addr, length);
     } else {

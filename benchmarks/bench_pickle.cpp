@@ -21,7 +21,7 @@ constexpr int32_t kGPU1 = 0;
 constexpr int32_t kGPU2 = 1;
 constexpr uint64_t kPacketSize = 1024;
 constexpr uint64_t kDataBufferSize = 1ull * 4 * 1024 * 1024 * 1024;
-constexpr uint32_t kChunkSize = 1ull * 2 * 1024 * 1024 * 1024;
+constexpr uint64_t kChunkSize = 1ull * 2 * 1024 * 1024 * 1024;
 constexpr ibv_rate kRate = ibv_rate::IBV_RATE_MAX;
 
 static std::atomic<uint64_t> bytes_transferred(0);

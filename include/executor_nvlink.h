@@ -28,7 +28,7 @@ struct alignas(64) NvlinkSendTicket {
     cudaIpcMemHandle_t handle;
     uint64_t offset;
     uint32_t unique_id;
-    uint32_t length;
+    uint64_t length;
 };
 
 // Receiver -> Sender：copy 完成之后的 ACK，同样要求 trivially copyable。
@@ -39,7 +39,7 @@ struct alignas(8) NvlinkAck {
 // 本地 recv() 请求的描述，生命周期仅限本进程。
 struct NvlinkRecvRequest {
     uint32_t unique_id;
-    uint32_t length;
+    uint64_t length;
     uint64_t addr;
     int32_t device;
 };
@@ -91,7 +91,7 @@ public:
     ) noexcept;
 
     [[nodiscard]] std::shared_ptr<Event>
-    send(uint32_t unique_id, uint64_t offset, uint32_t length, cudaIpcMemHandle_t handle);
+    send(uint32_t unique_id, uint64_t offset, uint64_t length, cudaIpcMemHandle_t handle);
 
     // 后台执行器：从 ACK 队列中取出完成的 unique_id，并通知 Event。
     // SAFETY: !! Not thread-safe, 单线程调用 !!
@@ -154,7 +154,7 @@ public:
     create(int dst_device, ipc::SPSCQueue<NvlinkSendTicket>&& recv_queue, ipc::SPSCQueue<NvlinkAck>&& ack_queue);
 
     // 应用接口：发起一次 NVLink 接收
-    [[nodiscard]] std::shared_ptr<Event> recv(uint32_t unique_id, uint64_t addr, uint32_t length);
+    [[nodiscard]] std::shared_ptr<Event> recv(uint32_t unique_id, uint64_t addr, uint64_t length);
 
     // 后台执行器：从 SPSCQueue 和本地队列取数据并做匹配，生成 copy task。
     // SAFETY: !! Not thread-safe, 单线程调用 !!
