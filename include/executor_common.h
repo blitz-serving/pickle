@@ -21,6 +21,12 @@ using Queue = moodycamel::ConcurrentQueue<T>;
 template<typename T>
 using MultiMap = std::map<uint32_t, std::queue<T>>;
 
+class Pollable {
+public:
+    virtual void poll() noexcept(false) = 0;
+    virtual ~Pollable() = default;
+};
+
 class Event {
 private:
     std::atomic<bool> finished_ = false;

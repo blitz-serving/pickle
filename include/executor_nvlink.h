@@ -57,7 +57,7 @@ struct NvlinkRecvCommand {
 //   (handle 由应用通过 cudaIpcGetMemHandle 预先获取) -> 等待 ACK。
 // - 后台 poll() 负责从 ack_queue_ 中取出 NvlinkAck，找到对应 Event 并 notify()。
 
-class NvlinkSender {
+class NvlinkSender: public Pollable {
 private:
     int device_;
 
@@ -95,7 +95,7 @@ public:
 
     // 后台执行器：从 ACK 队列中取出完成的 unique_id，并通知 Event。
     // SAFETY: !! Not thread-safe, 单线程调用 !!
-    void poll() noexcept;
+    void poll() noexcept override;
 };
 
 // ==================== NVLink Receiver：接收方执行器 ====================
@@ -108,7 +108,7 @@ public:
 //   3) 基于 unique_id 做匹配，生成 NvlinkCopyTask 放入 copy_task_queue_；
 // - 内部持有一个 NvlinkCopyExecutor，使用本 GPU 的 copy engine 做 cudaMemcpyAsync。
 
-class NvlinkRecver {
+class NvlinkRecver: public Pollable {
 private:
     int device_;
 
@@ -158,7 +158,7 @@ public:
 
     // 后台执行器：从 SPSCQueue 和本地队列取数据并做匹配，生成 copy task。
     // SAFETY: !! Not thread-safe, 单线程调用 !!
-    void poll() noexcept;
+    void poll() noexcept override;
 };
 
 }  // namespace pickle

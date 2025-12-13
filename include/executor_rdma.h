@@ -44,7 +44,7 @@ struct RdmaCommand {
     shared_ptr<Event> event;
 };
 
-class RdmaSender {
+class RdmaSender: public Pollable {
 private:
     uint64_t packet_size_;
 
@@ -81,7 +81,7 @@ public:
     RdmaSender& operator=(RdmaSender&&) = delete;
     ~RdmaSender() = default;
 
-    static shared_ptr<RdmaSender> create(unique_ptr<RcQueuePair> qp, uint64_t packet_size = 256 * 1024) noexcept(false);
+    static shared_ptr<RdmaSender> create(unique_ptr<RcQueuePair> qp, uint64_t packet_size = 64 * 1024) noexcept(false);
 
     [[nodiscard]] shared_ptr<Event> send(uint32_t unique_id, uint64_t addr, uint64_t length, uint32_t lkey);
 
@@ -89,7 +89,7 @@ public:
      * @brief The executor of the PickleSender.
      * SAFETY: !! This function is not thread-safe !!
      */
-    void poll() noexcept(false);
+    void poll() noexcept(false) override;
 };
 
 struct FlushInfo {
@@ -133,7 +133,7 @@ public:
     void poll() noexcept(false);
 };
 
-class RdmaRecver {
+class RdmaRecver: public Pollable {
 private:
     uint64_t count_pending_requests_;
     queue<RdmaTicket> pending_local_recv_request_queue_;
@@ -174,7 +174,7 @@ public:
      * @brief The executor of the PickleRecver
      * SAFETY: !! This function is not thread-safe !!
      */
-    void poll() noexcept(false);
+    void poll() noexcept(false) override;
 };
 
 }  // namespace pickle

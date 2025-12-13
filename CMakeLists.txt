@@ -10,6 +10,7 @@ option(BUILD_TESTS "Build tests" ON)
 option(BUILD_EXAMPLES "Build examples" ON)
 option(BUILD_BENCHMARKS "Build benchmarks" ON)
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
+option(USE_NCCL "Link benchmarks with NCCL" OFF)
 
 option(ENABLE_BUSY_WAIT "Enable busy-wait" OFF)
 if(ENABLE_BUSY_WAIT)
@@ -33,9 +34,23 @@ endif()
 enable_language(CUDA)
 find_package(CUDAToolkit REQUIRED)
 
+if(USE_NCCL)
+    # Locate NCCL to allow benchmark builds to compare against NCCL performance.
+    find_library(NCCL_LIBRARY nccl
+        HINTS ${CUDAToolkit_LIBRARY_DIR} ${CUDAToolkit_LIBRARY_ROOT}
+        PATH_SUFFIXES lib lib64
+    )
+    find_path(NCCL_INCLUDE_DIR nccl.h
+        HINTS ${CUDAToolkit_INCLUDE_DIRS} ${CUDAToolkit_LIBRARY_ROOT}/include /usr/local/cuda/include
+    )
+    if(NOT NCCL_LIBRARY OR NOT NCCL_INCLUDE_DIR)
+        message(FATAL_ERROR "USE_NCCL is ON but NCCL could not be located")
+    endif()
+endif()
+
 # Create rdma_util library
 add_library(rdma_util "src/rdma_util.cpp")
-target_link_libraries(rdma_util PUBLIC ibverbs concurrentqueue)
+target_link_libraries(rdma_util PUBLIC ibverbs)
 target_include_directories(rdma_util PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
@@ -43,7 +58,7 @@ target_include_directories(rdma_util PUBLIC
 
 add_library(pickle "src/executor_rdma.cpp" "src/executor_nvlink.cpp" "src/pickle.cpp")
 
-target_link_libraries(pickle PUBLIC rdma_util CUDA::cudart)
+target_link_libraries(pickle PUBLIC rdma_util concurrentqueue CUDA::cudart)
 
 target_include_directories(pickle PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -75,12 +90,21 @@ endif()
 
 # Add benchmark executables
 if(BUILD_BENCHMARKS)
+    find_package(MPI REQUIRED)
     file(GLOB BENCHMARK_SOURCES "benchmarks/*.cpp")
 
     foreach(BENCHMARK_SOURCE ${BENCHMARK_SOURCES})
         get_filename_component(BENCHMARK_NAME ${BENCHMARK_SOURCE} NAME_WE)
         add_executable(${BENCHMARK_NAME} ${BENCHMARK_SOURCE})
         target_link_libraries(${BENCHMARK_NAME} rdma_util pickle pthread CUDA::cudart)
+        if(BENCHMARK_NAME STREQUAL "bench_nccl_p2p" OR BENCHMARK_NAME STREQUAL "bench_pickle_p2p")
+            target_link_libraries(${BENCHMARK_NAME} MPI::MPI_CXX)
+        endif()
+        if(USE_NCCL)
+            target_link_libraries(${BENCHMARK_NAME} ${NCCL_LIBRARY})
+            target_include_directories(${BENCHMARK_NAME} PRIVATE ${NCCL_INCLUDE_DIR})
+            target_compile_definitions(${BENCHMARK_NAME} PRIVATE USE_NCCL)
+        endif()
     endforeach()
 endif()
 

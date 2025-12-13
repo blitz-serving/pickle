@@ -6,8 +6,10 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <random>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -32,11 +34,21 @@ inline std::pair<void*, size_t> count_aligned_chunks(void* ptr, size_t buffer_si
     return {reinterpret_cast<void*>(aligned_start), count};
 }
 
-int main() {
+void print_usage(const char* prog) {
+    fprintf(
+        stderr,
+        "Usage: %s [--gpu0 N] [--gpu1 N] [--nic0 DEV] [--nic1 DEV] "
+        "[--num-channels N] [--gid-index N] [--buffer-size BYTES] "
+        "[--chunk-size BYTES] [--ring-buffer-cap N]\n",
+        prog
+    );
+}
+
+int main(int argc, char** argv) {
     int gpu0 = 0;
     int gpu1 = 1;
-    const char* nic0 = "ib7s400p0";
-    const char* nic1 = "ib7s400p1";
+    std::string nic0 = "ib7s400p0";
+    std::string nic1 = "ib7s400p1";
     int num_channels = 1;
     int gid_index = 0;
     size_t buffer_size = 1ull * 40 * 1024 * 1024 * 1024;
@@ -44,11 +56,59 @@ int main() {
 
     int ring_buffer_cap = 16;
 
+    auto need_value = [&](int idx) -> const char* {
+        if (idx + 1 >= argc) {
+            fprintf(stderr, "Missing value for %s\n", argv[idx]);
+            print_usage(argv[0]);
+            std::exit(EXIT_FAILURE);
+        }
+        return argv[idx + 1];
+    };
+
+    for (int i = 1; i < argc; i++) {
+        const char* arg = argv[i];
+        if (strcmp(arg, "--gpu0") == 0) {
+            gpu0 = std::stoi(need_value(i));
+            i++;
+        } else if (strcmp(arg, "--gpu1") == 0) {
+            gpu1 = std::stoi(need_value(i));
+            i++;
+        } else if (strcmp(arg, "--nic0") == 0) {
+            nic0 = need_value(i);
+            i++;
+        } else if (strcmp(arg, "--nic1") == 0) {
+            nic1 = need_value(i);
+            i++;
+        } else if (strcmp(arg, "--num-channels") == 0) {
+            num_channels = std::stoi(need_value(i));
+            i++;
+        } else if (strcmp(arg, "--gid-index") == 0) {
+            gid_index = std::stoi(need_value(i));
+            i++;
+        } else if (strcmp(arg, "--buffer-size") == 0) {
+            buffer_size = std::stoull(need_value(i));
+            i++;
+        } else if (strcmp(arg, "--chunk-size") == 0) {
+            chunk_size = std::stoull(need_value(i));
+            i++;
+        } else if (strcmp(arg, "--ring-buffer-cap") == 0) {
+            ring_buffer_cap = std::stoi(need_value(i));
+            i++;
+        } else if (strcmp(arg, "--help") == 0 || strcmp(arg, "-h") == 0) {
+            print_usage(argv[0]);
+            return 0;
+        } else {
+            fprintf(stderr, "Unknown argument: %s\n", arg);
+            print_usage(argv[0]);
+            return EXIT_FAILURE;
+        }
+    }
+
     auto buffer0 = std::shared_ptr<void>(cuda_util::try_malloc(buffer_size, gpu0).unwrap(), cuda_util::free_unwrap);
     auto buffer1 = std::shared_ptr<void>(cuda_util::try_malloc(buffer_size, gpu1).unwrap(), cuda_util::free_unwrap);
 
-    shared_ptr pd0 = rdma_util::ProtectionDomain::create(rdma_util::Context::create(nic0));
-    shared_ptr pd1 = rdma_util::ProtectionDomain::create(rdma_util::Context::create(nic1));
+    shared_ptr pd0 = rdma_util::ProtectionDomain::create(rdma_util::Context::create(nic0.c_str()));
+    shared_ptr pd1 = rdma_util::ProtectionDomain::create(rdma_util::Context::create(nic1.c_str()));
 
     shared_ptr mr0 = rdma_util::MemoryRegion::create(pd0, buffer0, buffer_size);
     shared_ptr mr1 = rdma_util::MemoryRegion::create(pd1, buffer1, buffer_size);
@@ -118,8 +178,8 @@ int main() {
         while (true) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
             uint64_t curr = counter.load();
-            double bandwidth = (curr - prev) / 1024.0 / 1024.0 / 1024.0;
-            INFO("Bandwidth: {} GB/s", bandwidth);
+            double bandwidth = (curr - prev) * 8.0 / 1e9;
+            INFO("Bandwidth: {} Gbps", bandwidth);
             prev = curr;
         }
     };

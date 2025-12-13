@@ -378,7 +378,7 @@ int run_parent_sender(const BenchConfig& cfg, pid_t child_pid, int child_to_pare
 
         const double sec = std::chrono::duration<double>(t1 - t0).count();
         const double total_bytes = static_cast<double>(bytes) * static_cast<double>(cfg.iters);
-        const double gib = total_bytes / (1024.0 * 1024.0 * 1024.0);
+        const double gib = total_bytes / 1.0e9;
         const double gbps = (sec > 0.0) ? (gib / sec) : 0.0;
 
         std::cout << "size=" << cfg.sizes_bytes[si] << " B"

@@ -12,10 +12,19 @@
         }                                                                                \
     } while (0)
 
-int main() {
-    const int src_dev = 0;
-    const int dst_dev = 1;
-    const size_t bytes = 64ull * 1024 * 1024;  // 64 GiB
+int main(int argc, char** argv) {
+    int src_dev = 0;
+    int dst_dev = 1;
+
+    if (argc >= 3) {
+        src_dev = std::atoi(argv[1]);
+        dst_dev = std::atoi(argv[2]);
+    } else {
+        std::fprintf(stderr, "Usage: %s <src_dev> <dst_dev> (default 0 1)\n", argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    const size_t bytes = 64ull * 1024 * 1024;  // 64 MiB
     const int iters = 200;
 
     // P2P check + enable
@@ -62,7 +71,8 @@ int main() {
     // timed
     CHECK(cudaEventRecord(start, stream));
     for (int i = 0; i < iters; ++i) {
-        CHECK(cudaMemcpyPeerAsync(d_dst, dst_dev, d_src, src_dev, bytes, stream));
+        CHECK(cudaMemcpyAsync(d_dst, d_src, bytes, cudaMemcpyDeviceToDevice, stream));
+        // CHECK(cudaMemcpyPeerAsync(d_dst, dst_dev, d_src, src_dev, bytes, stream));
     }
     CHECK(cudaEventRecord(stop, stream));
     CHECK(cudaEventSynchronize(stop));
