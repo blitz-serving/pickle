@@ -110,11 +110,12 @@ std::shared_ptr<Event> NvlinkRecver::recv(uint32_t unique_id, uint64_t addr, uin
 }
 
 void NvlinkRecver::ensure_stream() {
-    if (this->stream_ != nullptr) {
-        return;
-    }
+    // Always set device on the calling thread before touching CUDA resources since poll() can run
+    // from different threads across warmup/benchmark phases.
     CUDA_CHECK(cudaSetDevice(this->device_));
-    CUDA_CHECK(cudaStreamCreateWithFlags(&this->stream_, cudaStreamNonBlocking));
+    if (this->stream_ == nullptr) {
+        CUDA_CHECK(cudaStreamCreateWithFlags(&this->stream_, cudaStreamNonBlocking));
+    }
 }
 
 void NvlinkRecver::start_copy(const NvlinkSendTicket& ticket, NvlinkRecvCommand&& cmd) {
@@ -181,6 +182,7 @@ void NvlinkRecver::cleanup_inflight() {
 }
 
 void NvlinkRecver::poll() noexcept {
+    CUDA_CHECK(cudaSetDevice(this->device_));
     // 1. 从 SPSCQueue 中取出 remote send ticket
     while (true) {
         auto res = this->recv_ticket_queue_.try_pop();

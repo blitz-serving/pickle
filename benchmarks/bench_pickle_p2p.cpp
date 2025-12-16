@@ -1,3 +1,15 @@
+/*
+
+```bash
+mpirun --allow-run-as-root -n 8 \
+./build/bench_pickle_p2p \
+--nics ib7s400p0,ib7s400p1,ib7s400p2,ib7s400p3,ib7s400p4,ib7s400p5,ib7s400p6,ib7s400p7 \
+--num-channels 4 \
+--size 68719476736 \
+--warmup 1 --iters 10
+```
+
+*/
 #include <cuda_runtime.h>
 #include <mpi.h>
 
@@ -13,6 +25,7 @@
 
 #include "cuda_util.h"
 #include "executor_rdma.h"
+#include "pickle_logger.h"
 #include "rdma_util.h"
 
 using std::shared_ptr;
@@ -22,9 +35,8 @@ using std::vector;
 static void print_usage(const char* prog) {
     std::fprintf(
         stderr,
-        "Usage: mpirun -n 2 %s \\n"
-        "  [--sender-gpu N] [--recver-gpu N] \\n"
-        "  [--sender-nic DEV] [--recver-nic DEV] \\n"
+        "Usage: mpirun -n <world_size>=num_gpus %s \\n"
+        "  [--nics nic0,nic1,...,nicN] \\n"
         "  [--num-channels N] [--gid-index N] \\n"
         "  [--size BYTES] \\n"
         "  [--warmup N] [--iters N]\n",
@@ -42,10 +54,7 @@ static inline void mpi_fail(const char* msg) {
 }
 
 int main(int argc, char** argv) {
-    int sender_gpu = 0;
-    int recver_gpu = 1;
-    string sender_nic = "ib7s400p0";
-    string recver_nic = "ib7s400p1";
+    string nics_csv;
     int num_channels = 1;
     int gid_index = 0;
 
@@ -64,17 +73,8 @@ int main(int argc, char** argv) {
 
     for (int i = 1; i < argc; ++i) {
         const char* arg = argv[i];
-        if (std::strcmp(arg, "--sender-gpu") == 0) {
-            sender_gpu = std::stoi(need_value(i));
-            ++i;
-        } else if (std::strcmp(arg, "--recver-gpu") == 0) {
-            recver_gpu = std::stoi(need_value(i));
-            ++i;
-        } else if (std::strcmp(arg, "--sender-nic") == 0) {
-            sender_nic = need_value(i);
-            ++i;
-        } else if (std::strcmp(arg, "--recver-nic") == 0) {
-            recver_nic = need_value(i);
+        if (std::strcmp(arg, "--nics") == 0) {
+            nics_csv = need_value(i);
             ++i;
         } else if (std::strcmp(arg, "--num-channels") == 0) {
             num_channels = std::stoi(need_value(i));
@@ -108,8 +108,8 @@ int main(int argc, char** argv) {
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-    if (world_size != 2) {
-        mpi_fail("bench_pickle_p2p requires exactly 2 MPI processes.");
+    if (world_size < 2) {
+        mpi_fail("bench_pickle_p2p requires at least 2 MPI processes.");
     }
     if (num_channels <= 0 || iters <= 0 || warmup < 0) {
         mpi_fail("Invalid args: require num-channels>0, iters>0, warmup>=0.");
@@ -118,28 +118,38 @@ int main(int argc, char** argv) {
         mpi_fail("Invalid args: require size>0.");
     }
 
-    // Choose local device / nic by rank.
-    const bool is_sender = (rank == 0);
-    const int local_gpu = is_sender ? sender_gpu : recver_gpu;
-    const string& local_nic = is_sender ? sender_nic : recver_nic;
+    // Parse NIC list.
+    vector<string> nic_list;
+    {
+        size_t start = 0;
+        while (start < nics_csv.size()) {
+            size_t comma = nics_csv.find(',', start);
+            if (comma == string::npos) {
+                nic_list.push_back(nics_csv.substr(start));
+                break;
+            } else {
+                nic_list.push_back(nics_csv.substr(start, comma - start));
+                start = comma + 1;
+            }
+        }
+        if (!nics_csv.empty() && nics_csv.back() == ',') {
+            nic_list.push_back("");
+        }
+    }
+    if (nic_list.size() != static_cast<size_t>(world_size)) {
+        mpi_fail("Invalid args: --nics must list exactly world_size entries (comma separated).");
+    }
+    const string& local_nic = nic_list[rank];
 
     int dev_count = 0;
     CUDA_CHECK(cudaGetDeviceCount(&dev_count));
-    if (local_gpu < 0 || local_gpu >= dev_count) {
-        if (rank == 0) {
-            std::fprintf(
-                stderr,
-                "Invalid GPU id(s): sender=%d recver=%d, device_count=%d\n",
-                sender_gpu,
-                recver_gpu,
-                dev_count
-            );
-        }
-        MPI_Finalize();
-        return EXIT_FAILURE;
+    if (world_size > dev_count) {
+        mpi_fail("GPU count must be >= world_size; set world_size accordingly.");
     }
 
+    const int local_gpu = rank;
     CUDA_CHECK(cudaSetDevice(local_gpu));
+    bool is_sender = rank % 2 == 0;
 
     // Allocate + register GPU buffer.
     // Allocate exactly 'bytes'; effective bytes may shrink after shard rounding.
@@ -159,33 +169,53 @@ int main(int argc, char** argv) {
     senders.reserve(num_channels);
     recvers.reserve(num_channels);
 
+    const int peer = is_sender ? (rank + 1) % world_size : (rank - 1 + world_size) % world_size;
+
     for (int c = 0; c < num_channels; ++c) {
-        auto qp = rdma_util::RcQueuePair::create(pd);
-
-        // Exchange handshake data with peer.
-        rdma_util::HandshakeData local_hs = qp->get_handshake_data(gid_index);
-        rdma_util::HandshakeData remote_hs;
-
-        MPI_Sendrecv(
-            &local_hs,
-            sizeof(local_hs),
-            MPI_BYTE,
-            /*dest=*/1 - rank,
-            /*sendtag=*/1000 + c,
-            &remote_hs,
-            sizeof(remote_hs),
-            MPI_BYTE,
-            /*source=*/1 - rank,
-            /*recvtag=*/1000 + c,
-            MPI_COMM_WORLD,
-            MPI_STATUS_IGNORE
-        );
-
-        qp->bring_up(remote_hs, gid_index);
-
+        // Send QP to next rank.
         if (is_sender) {
+            auto qp = rdma_util::RcQueuePair::create(pd);
+            rdma_util::HandshakeData local_hs = qp->get_handshake_data(gid_index);
+            rdma_util::HandshakeData remote_hs;
+
+            MPI_Sendrecv(
+                &local_hs,
+                sizeof(local_hs),
+                MPI_BYTE,
+                /*dest=*/peer,
+                /*sendtag=*/1000 + c,
+                &remote_hs,
+                sizeof(remote_hs),
+                MPI_BYTE,
+                /*source=*/peer,
+                /*recvtag=*/1000 + c,
+                MPI_COMM_WORLD,
+                MPI_STATUS_IGNORE
+            );
+
+            qp->bring_up(remote_hs, gid_index);
             senders.push_back(pickle::RdmaSender::create(std::move(qp)));
         } else {
+            auto qp = rdma_util::RcQueuePair::create(pd);
+            rdma_util::HandshakeData local_hs = qp->get_handshake_data(gid_index);
+            rdma_util::HandshakeData remote_hs;
+
+            MPI_Sendrecv(
+                &local_hs,
+                sizeof(local_hs),
+                MPI_BYTE,
+                /*dest=*/peer,
+                /*sendtag=*/1000 + c,
+                &remote_hs,
+                sizeof(remote_hs),
+                MPI_BYTE,
+                /*source=*/peer,
+                /*recvtag=*/1000 + c,
+                MPI_COMM_WORLD,
+                MPI_STATUS_IGNORE
+            );
+
+            qp->bring_up(remote_hs, gid_index);
             recvers.push_back(pickle::RdmaRecver::create(std::move(qp)));
         }
     }
@@ -274,37 +304,43 @@ int main(int argc, char** argv) {
     };
 
     // Warmup.
+    if (rank == 0) {
+        INFO("Warmup...");
+    }
     for (int i = 0; i < warmup; ++i) {
         run_once(i, /*measure=*/false);
     }
 
+    if (rank == 0) {
+        INFO("TEST...");
+    }
     double total_sec = 0.0;
     for (int i = 0; i < iters; ++i) {
         double sec = run_once(warmup + i, /*measure=*/true);
-        if (is_sender) {
-            total_sec += sec;
-            double gbps = (static_cast<double>(bytes) * 8.0) / (sec * 1e9);
-            std::printf(
-                "Iter %d: %.2f Gbps (%.3f ms), payload %zu bytes, channels %d\n",
-                i,
-                gbps,
-                sec * 1e3,
-                bytes,
-                num_channels
-            );
-        }
-    }
-
-    if (is_sender) {
-        double avg_gbps = (static_cast<double>(bytes) * 8.0 * iters) / (total_sec * 1e9);
+        total_sec += sec;
+        double gbps = (static_cast<double>(bytes) * 8.0) / (sec * 1e9);
         std::printf(
-            "Average bandwidth: %.2f Gbps over %d iterations, payload %zu bytes, channels %d\n",
-            avg_gbps,
-            iters,
+            "Rank %d -> %d Iter %d: %.2f Gbps (%.3f ms), payload %zu bytes, channels %d\n",
+            rank,
+            peer,
+            i,
+            gbps,
+            sec * 1e3,
             bytes,
             num_channels
         );
     }
+
+    double avg_gbps = (static_cast<double>(bytes) * 8.0 * iters) / (total_sec * 1e9);
+    std::printf(
+        "Rank %d -> %d average bandwidth: %.2f Gbps over %d iterations, payload %zu bytes, channels %d\n",
+        rank,
+        peer,
+        avg_gbps,
+        iters,
+        bytes,
+        num_channels
+    );
 
     MPI_Finalize();
     return 0;
