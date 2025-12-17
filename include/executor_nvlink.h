@@ -6,8 +6,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
-#include <map>
 #include <memory>
+#include <vector>
 
 #include "executor_common.h"
 #include "spsc.h"
@@ -57,23 +57,21 @@ struct NvlinkRecvCommand {
 //   (handle 由应用通过 cudaIpcGetMemHandle 预先获取) -> 等待 ACK。
 // - 后台 poll() 负责从 ack_queue_ 中取出 NvlinkAck，找到对应 Event 并 notify()。
 
-class NvlinkSender: public Pollable {
+class NvlinkSender: public Pollable, public SendTrait {
 private:
-    int device_;
-
     // Sender -> Receiver：发送 ticket 的 SPSCQueue（本进程为 producer）
     ipc::SPSCQueue<NvlinkSendTicket> send_ticket_queue_;
     // Receiver -> Sender：发送 ACK 的 SPSCQueue（本进程为 consumer）
     ipc::SPSCQueue<NvlinkAck> ack_queue_;
 
     // 以 unique_id 为 key 的 pending event
-    std::map<uint32_t, std::shared_ptr<Event>> pending_send_event_map_;
+    MultiMap<std::shared_ptr<Event>> pending_send_event_map_;
 
-    NvlinkSender(
-        int device,
-        ipc::SPSCQueue<NvlinkSendTicket>&& send_ticket_queue,
-        ipc::SPSCQueue<NvlinkAck>&& ack_queue
-    ) noexcept;
+    NvlinkHandle lookup_ipc_handle(uint64_t addr, uint64_t length) const;
+
+    std::vector<NvlinkHandle> nvlink_handles_;
+
+    NvlinkSender(ipc::SPSCQueue<NvlinkSendTicket>&& send_ticket_queue, ipc::SPSCQueue<NvlinkAck>&& ack_queue) noexcept;
 
 public:
     NvlinkSender() = delete;
@@ -84,11 +82,12 @@ public:
     ~NvlinkSender() = default;
 
     // 工厂函数：由上层在完成 SPSCQueue 建立后调用。
-    static std::shared_ptr<NvlinkSender> create(
-        int src_device,
-        ipc::SPSCQueue<NvlinkSendTicket>&& send_ticket_queue,
-        ipc::SPSCQueue<NvlinkAck>&& ack_queue
-    ) noexcept;
+    static std::shared_ptr<NvlinkSender>
+    create(ipc::SPSCQueue<NvlinkSendTicket>&& send_ticket_queue, ipc::SPSCQueue<NvlinkAck>&& ack_queue) noexcept;
+
+    void register_nvlink_handle(const NvlinkHandle& handle);
+
+    [[nodiscard]] std::shared_ptr<Event> send(uint32_t unique_id, uint64_t addr, uint64_t length) override;
 
     [[nodiscard]] std::shared_ptr<Event>
     send(uint32_t unique_id, uint64_t offset, uint64_t length, cudaIpcMemHandle_t handle);
@@ -108,7 +107,7 @@ public:
 //   3) 基于 unique_id 做匹配，生成 NvlinkCopyTask 放入 copy_task_queue_；
 // - 内部持有一个 NvlinkCopyExecutor，使用本 GPU 的 copy engine 做 cudaMemcpyAsync。
 
-class NvlinkRecver: public Pollable {
+class NvlinkRecver: public Pollable, public RecvTrait {
 private:
     int device_;
 
@@ -154,7 +153,7 @@ public:
     create(int dst_device, ipc::SPSCQueue<NvlinkSendTicket>&& recv_queue, ipc::SPSCQueue<NvlinkAck>&& ack_queue);
 
     // 应用接口：发起一次 NVLink 接收
-    [[nodiscard]] std::shared_ptr<Event> recv(uint32_t unique_id, uint64_t addr, uint64_t length);
+    [[nodiscard]] std::shared_ptr<Event> recv(uint32_t unique_id, uint64_t addr, uint64_t length) override;
 
     // 后台执行器：从 SPSCQueue 和本地队列取数据并做匹配，生成 copy task。
     // SAFETY: !! Not thread-safe, 单线程调用 !!

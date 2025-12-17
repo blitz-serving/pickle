@@ -3,6 +3,7 @@
 #include <emmintrin.h>
 
 #include <array>
+#include <cstring>
 #include <utility>
 
 #include "cuda_util.h"
@@ -13,20 +14,42 @@ namespace pickle {
 using namespace std::chrono_literals;
 
 NvlinkSender::NvlinkSender(
-    int device,
     ipc::SPSCQueue<NvlinkSendTicket>&& send_ticket_queue,
     ipc::SPSCQueue<NvlinkAck>&& ack_queue
 ) noexcept :
-    device_(device),
     send_ticket_queue_(std::move(send_ticket_queue)),
     ack_queue_(std::move(ack_queue)) {}
 
 std::shared_ptr<NvlinkSender> NvlinkSender::create(
-    int device,
     ipc::SPSCQueue<NvlinkSendTicket>&& send_ticket_queue,
     ipc::SPSCQueue<NvlinkAck>&& ack_queue
 ) noexcept {
-    return std::shared_ptr<NvlinkSender>(new NvlinkSender(device, std::move(send_ticket_queue), std::move(ack_queue)));
+    return std::shared_ptr<NvlinkSender>(new NvlinkSender(std::move(send_ticket_queue), std::move(ack_queue)));
+}
+
+void NvlinkSender::register_nvlink_handle(const NvlinkHandle& handle) {
+    this->nvlink_handles_.push_back(handle);
+}
+
+NvlinkHandle NvlinkSender::lookup_ipc_handle(uint64_t addr, uint64_t length) const {
+    uint64_t end_addr = addr + length;
+    PICKLE_ASSERT(end_addr >= addr, "Address overflow when looking up NVLink IPC handle");
+
+    for (const auto& handle : this->nvlink_handles_) {
+        uint64_t base_addr = handle.addr;
+        uint64_t limit = base_addr + handle.length;
+        if (addr >= base_addr && end_addr <= limit) {
+            return handle;
+        }
+    }
+
+    PICKLE_ASSERT(false, "No NVLink IPC handle covers addr=0x{:x}, length=0x{:x}", addr, length);
+    return NvlinkHandle {};
+}
+
+std::shared_ptr<Event> NvlinkSender::send(uint32_t unique_id, uint64_t addr, uint64_t length) {
+    auto nvlink_handle = this->lookup_ipc_handle(addr, length);
+    return this->send(unique_id, addr - nvlink_handle.addr, length, nvlink_handle.handle);
 }
 
 std::shared_ptr<Event>
@@ -42,11 +65,7 @@ NvlinkSender::send(uint32_t unique_id, uint64_t offset, uint64_t length, cudaIpc
     this->send_ticket_queue_.try_push(ticket).unwrap();
 
     // 记录 pending event，用于之后 ACK 时唤醒
-    PICKLE_ASSERT(
-        this->pending_send_event_map_.emplace(unique_id, event).second,
-        "NvlinkSender: duplicated unique_id={}",
-        unique_id
-    );
+    this->pending_send_event_map_[unique_id].push(event);
 
     return event;
 }
@@ -59,15 +78,9 @@ void NvlinkSender::poll() noexcept {
         }
 
         NvlinkAck ack = std::move(res.unwrap());
-        auto iter = this->pending_send_event_map_.find(ack.unique_id);
-        PICKLE_ASSERT(
-            iter != this->pending_send_event_map_.end(),
-            "NvlinkSender::poll() received unknown ACK unique_id={}",
-            ack.unique_id
-        );
-
-        iter->second->notify();
-        this->pending_send_event_map_.erase(iter);
+        auto& queue = this->pending_send_event_map_[ack.unique_id];
+        queue.front()->notify();
+        queue.pop();
     }
 }
 

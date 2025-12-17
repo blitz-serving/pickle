@@ -312,7 +312,6 @@ int run_parent_sender(const BenchConfig& cfg, pid_t child_pid, int child_to_pare
     CUDA_CHECK(cudaSetDevice(GPU_SENDER));
 
     auto sender = NvlinkSender::create(
-        GPU_SENDER,
         ipc::SPSCQueue<NvlinkSendTicket>::create_producer(TICKET_QUEUE_NAME, QUEUE_BYTES_TICKET).unwrap(),
         ipc::SPSCQueue<NvlinkAck>::create_consumer(ACK_QUEUE_NAME, QUEUE_BYTES_ACK).unwrap()
     );

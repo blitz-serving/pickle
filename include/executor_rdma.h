@@ -44,7 +44,7 @@ struct RdmaCommand {
     shared_ptr<Event> event;
 };
 
-class RdmaSender: public Pollable {
+class RdmaSender: public Pollable, public SendTrait {
 private:
     uint64_t packet_size_;
 
@@ -70,8 +70,11 @@ private:
     void drain_local_send_requests();
     void build_and_post();
     void handle_completions();
+    uint32_t lookup_lkey(uint64_t addr, uint64_t length) const;
 
     RdmaSender(unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcept(false);
+
+    vector<shared_ptr<MemoryRegion>> memory_regions_;
 
 public:
     RdmaSender() = delete;
@@ -83,6 +86,9 @@ public:
 
     static shared_ptr<RdmaSender> create(unique_ptr<RcQueuePair> qp, uint64_t packet_size = 64 * 1024) noexcept(false);
 
+    void register_memory_region(shared_ptr<MemoryRegion> mr);
+
+    [[nodiscard]] shared_ptr<Event> send(uint32_t unique_id, uint64_t addr, uint64_t length) override;
     [[nodiscard]] shared_ptr<Event> send(uint32_t unique_id, uint64_t addr, uint64_t length, uint32_t lkey);
 
     /**
@@ -133,7 +139,7 @@ public:
     void poll() noexcept(false);
 };
 
-class RdmaRecver: public Pollable {
+class RdmaRecver: public Pollable, public RecvTrait {
 private:
     uint64_t count_pending_requests_;
     queue<RdmaTicket> pending_local_recv_request_queue_;
@@ -157,6 +163,9 @@ private:
 
     RdmaRecver(unique_ptr<RcQueuePair> qp, shared_ptr<RdmaFlusher> flusher) noexcept(false);
 
+    vector<shared_ptr<MemoryRegion>> memory_regions_;
+    uint32_t lookup_rkey(uint64_t addr, uint64_t length) const;
+
 public:
     RdmaRecver() = delete;
     RdmaRecver(const RdmaRecver&) = delete;
@@ -167,6 +176,10 @@ public:
 
     static shared_ptr<RdmaRecver>
     create(unique_ptr<RcQueuePair> qp, shared_ptr<RdmaFlusher> flusher = nullptr) noexcept(false);
+
+    void register_memory_region(shared_ptr<MemoryRegion> mr);
+
+    [[nodiscard]] shared_ptr<Event> recv(uint32_t unique_id, uint64_t addr, uint64_t length) override;
 
     [[nodiscard]] shared_ptr<Event> recv(uint32_t unique_id, uint64_t addr, uint64_t length, uint32_t rkey);
 

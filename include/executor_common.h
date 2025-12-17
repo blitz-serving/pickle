@@ -21,12 +21,6 @@ using Queue = moodycamel::ConcurrentQueue<T>;
 template<typename T>
 using MultiMap = std::map<uint32_t, std::queue<T>>;
 
-class Pollable {
-public:
-    virtual void poll() noexcept(false) = 0;
-    virtual ~Pollable() = default;
-};
-
 class Event {
 private:
     std::atomic<bool> finished_ = false;
@@ -63,6 +57,24 @@ public:
         }
 #endif
     }
+};
+
+class Pollable {
+public:
+    virtual void poll() noexcept(false) = 0;
+    virtual ~Pollable() = default;
+};
+
+class SendTrait {
+public:
+    virtual std::shared_ptr<Event> send(uint32_t unique_id, uint64_t addr, uint64_t length) = 0;
+    virtual ~SendTrait() = default;
+};
+
+class RecvTrait {
+public:
+    virtual std::shared_ptr<Event> recv(uint32_t unique_id, uint64_t addr, uint64_t length) = 0;
+    virtual ~RecvTrait() = default;
 };
 
 }  // namespace pickle

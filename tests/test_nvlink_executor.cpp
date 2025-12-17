@@ -120,7 +120,6 @@ int run_parent_sender(pid_t child_pid) {
 
     // 2. 创建 NvlinkSender
     auto sender = NvlinkSender::create(
-        GPU_SENDER,
         ipc::SPSCQueue<NvlinkSendTicket>::create_producer(TICKET_QUEUE_NAME, QUEUE_BYTES_TICKET).unwrap(),
         ipc::SPSCQueue<NvlinkAck>::create_consumer(ACK_QUEUE_NAME, QUEUE_BYTES_ACK).unwrap()
     );

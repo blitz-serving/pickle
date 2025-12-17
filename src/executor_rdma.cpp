@@ -61,6 +61,32 @@ RdmaSender::RdmaSender(unique_ptr<RcQueuePair> qp, uint64_t packet_size) noexcep
     }
 }
 
+void RdmaSender::register_memory_region(shared_ptr<MemoryRegion> mr) {
+    PICKLE_ASSERT(mr != nullptr, "MemoryRegion should not be null");
+    this->memory_regions_.push_back(std::move(mr));
+}
+
+uint32_t RdmaSender::lookup_lkey(uint64_t addr, uint64_t length) const {
+    uint64_t end_addr = addr + length;
+    PICKLE_ASSERT(end_addr >= addr, "Address overflow when looking up lkey");
+
+    for (const auto& mr : this->memory_regions_) {
+        PICKLE_ASSERT(mr != nullptr, "Encountered null MemoryRegion in registry");
+        uint64_t base_addr = reinterpret_cast<uint64_t>(mr->get_addr());
+        uint64_t limit = base_addr + mr->get_length();
+        if (addr >= base_addr && end_addr <= limit) {
+            return mr->get_lkey();
+        }
+    }
+
+    PICKLE_ASSERT(false, "No MemoryRegion covers addr=0x{:x}, length=0x{:x}", addr, length);
+    return 0;
+}
+
+shared_ptr<Event> RdmaSender::send(uint32_t unique_id, uint64_t addr, uint64_t length) {
+    return this->send(unique_id, addr, length, this->lookup_lkey(addr, length));
+}
+
 shared_ptr<Event> RdmaSender::send(uint32_t unique_id, uint64_t addr, uint64_t length, uint32_t lkey) {
     auto event = Event::create();
     auto ticket = RdmaTicket {.addr = addr, .length = length, .unique_id = unique_id, .key = lkey};
@@ -285,6 +311,32 @@ RdmaRecver::RdmaRecver(unique_ptr<RcQueuePair> qp, shared_ptr<RdmaFlusher> flush
 
 shared_ptr<RdmaRecver> RdmaRecver::create(unique_ptr<RcQueuePair> qp, shared_ptr<RdmaFlusher> flusher) noexcept(false) {
     return shared_ptr<RdmaRecver>(new RdmaRecver(std::move(qp), std::move(flusher)));
+}
+
+void RdmaRecver::register_memory_region(shared_ptr<MemoryRegion> mr) {
+    PICKLE_ASSERT(mr != nullptr, "MemoryRegion should not be null");
+    this->memory_regions_.push_back(std::move(mr));
+}
+
+uint32_t RdmaRecver::lookup_rkey(uint64_t addr, uint64_t length) const {
+    uint64_t end_addr = addr + length;
+    PICKLE_ASSERT(end_addr >= addr, "Address overflow when looking up rkey");
+
+    for (const auto& mr : this->memory_regions_) {
+        PICKLE_ASSERT(mr != nullptr, "Encountered null MemoryRegion in registry");
+        uint64_t base_addr = reinterpret_cast<uint64_t>(mr->get_addr());
+        uint64_t limit = base_addr + mr->get_length();
+        if (addr >= base_addr && end_addr <= limit) {
+            return mr->get_rkey();
+        }
+    }
+
+    PICKLE_ASSERT(false, "No MemoryRegion covers addr=0x{:x}, length=0x{:x}", addr, length);
+    return 0;
+}
+
+shared_ptr<Event> RdmaRecver::recv(uint32_t unique_id, uint64_t addr, uint64_t length) {
+    return this->recv(unique_id, addr, length, this->lookup_rkey(addr, length));
 }
 
 shared_ptr<Event> RdmaRecver::recv(uint32_t unique_id, uint64_t addr, uint64_t length, uint32_t rkey) {
