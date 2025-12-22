@@ -11,11 +11,7 @@ option(BUILD_EXAMPLES "Build examples" ON)
 option(BUILD_BENCHMARKS "Build benchmarks" ON)
 option(BUILD_SHARED_LIBS "Build shared libraries" OFF)
 
-# Add third-party libraries
-if(NOT TARGET fmt)
-    add_subdirectory(third_party/fmt)
-    link_libraries(fmt-header-only)
-endif()
+find_package(fmt REQUIRED)
 
 if(NOT TARGET concurrentqueue)
     add_subdirectory(third_party/concurrentqueue)
