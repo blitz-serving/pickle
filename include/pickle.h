@@ -4,6 +4,7 @@
 #include <infiniband/verbs.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <map>
@@ -11,6 +12,7 @@
 #include <queue>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "concurrentqueue.h"
@@ -74,6 +76,23 @@ public:
             std::this_thread::yield();
         }
     }
+
+    /**
+     * @brief Wait until the operation is finished or timeout elapses.
+     * @return true if finished, false if timed out.
+     * Useful for call sites that need to escape a hung wait (e.g. on peer
+     * process crash where no CQE will ever arrive) and recheck a cancel flag.
+     */
+    inline bool wait_for(std::chrono::milliseconds timeout) const {
+        auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (!this->is_finished()) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                return false;
+            }
+            std::this_thread::yield();
+        }
+        return true;
+    }
 };
 
 class PickleSender {
@@ -119,6 +138,18 @@ public:
      * SAFETY: !! This function is not thread-safe !!
      */
     void poll() noexcept(false);
+
+    /**
+     * @brief Query the underlying QP state.
+     */
+    ibv_qp_state query_state() const { return qp_->query_qp_state(); }
+
+    /**
+     * @brief Force-complete all pending send handles by setting their flags to true.
+     * Call this when the QP has entered an error state and pending WRs will never complete.
+     * SAFETY: !! This function is not thread-safe !! Same constraint as poll().
+     */
+    void force_complete_all();
 };
 
 struct FlushInfo {
@@ -203,6 +234,18 @@ public:
      * SAFETY: !! This function is not thread-safe !!
      */
     void poll() noexcept(false);
+
+    /**
+     * @brief Query the underlying QP state.
+     */
+    ibv_qp_state query_state() const { return qp_->query_qp_state(); }
+
+    /**
+     * @brief Force-complete all pending recv handles by setting their flags to true.
+     * Call this when the QP has entered an error state and pending WRs will never complete.
+     * SAFETY: !! This function is not thread-safe !! Same constraint as poll().
+     */
+    void force_complete_all();
 };
 
 }  // namespace pickle

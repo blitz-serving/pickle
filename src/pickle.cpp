@@ -75,15 +75,27 @@ void PickleSender::poll() noexcept(false) {
 
     PICKLE_ASSERT(ret >= 0);
     for (const auto& wc : this->polled_recv_wcs_) {
-        PICKLE_ASSERT(
-            wc.status == ibv_wc_status::IBV_WC_SUCCESS && wc.opcode == ibv_wc_opcode::IBV_WC_RECV,
-            "Failed to receive data: status={}, opcode={}, vendor_err={}, status_str=\"{}\"",
-            int(wc.status),
-            int(wc.opcode),
-            wc.vendor_err,
-            ibv_wc_status_str(wc.status)
-
-        );
+        if (wc.status != ibv_wc_status::IBV_WC_SUCCESS ||
+            wc.opcode != ibv_wc_opcode::IBV_WC_RECV) {
+            // Error CQE on the ticket-receive path. Don't abort — log and re-post
+            // the recv WR so we don't deplete the recv pool. QP error detection
+            // in start_polling will tear the connection down on its own.
+            WARN(
+                "pickle::PickleSender::poll() recv CQ error CQE: status={}, opcode={}, vendor_err={}, status_str=\"{}\"",
+                int(wc.status),
+                int(wc.opcode),
+                wc.vendor_err,
+                ibv_wc_status_str(wc.status)
+            );
+            auto wr_id = wc.wr_id;
+            this->qp_->post_recv(
+                wr_id,
+                this->recv_buffer_addr_ + wr_id * sizeof(Ticket),
+                sizeof(Ticket),
+                this->recv_buffer_lkey_
+            );
+            continue;
+        }
         auto wr_id = wc.wr_id;
         Ticket ticket {};
         memcpy(&ticket, reinterpret_cast<void*>(this->recv_buffer_addr_ + wr_id * sizeof(Ticket)), sizeof(Ticket));
@@ -223,14 +235,39 @@ void PickleSender::poll() noexcept(false) {
                 int(wc.status),
                 int(wc.opcode)
             );
-            PICKLE_ASSERT(
-                wc.status == ibv_wc_status::IBV_WC_SUCCESS && wc.opcode == ibv_wc_opcode::IBV_WC_RDMA_WRITE,
-                "Op write_with_imm failed: status={}, opcode={}, vendor_err={}, status_str=\"{}\"",
-                int(wc.status),
-                int(wc.opcode),
-                wc.vendor_err,
-                ibv_wc_status_str(wc.status)
-            );
+            if (wc.status != ibv_wc_status::IBV_WC_SUCCESS ||
+                wc.opcode != ibv_wc_opcode::IBV_WC_RDMA_WRITE) {
+                // Error CQE on the send path. When a QP enters the error state
+                // it flushes EVERY outstanding WR (signaled and unsignaled), so
+                // each error CQE maps to exactly one posted WR. Subtract one per
+                // CQE (guarded against underflow) rather than the cumulative
+                // doorbell_length — the latter is only correct for the single
+                // signaled completion on the success path, and subtracting it
+                // per flushed WR overcounts and underflows wr_occupied_, wedging
+                // the send queue into a permanently-full state. Any residual
+                // inaccuracy is harmless: force_complete_all() resets
+                // wr_occupied_ to 0 when QP error detection tears the connection
+                // down.
+                WARN(
+                    "pickle::PickleSender::poll() send CQ error CQE: status={}, opcode={}, vendor_err={}, status_str=\"{}\"",
+                    int(wc.status),
+                    int(wc.opcode),
+                    wc.vendor_err,
+                    ibv_wc_status_str(wc.status)
+                );
+                wrid_t wr_id;
+                wr_id.value = wc.wr_id;
+                bool request_finished = wr_id.wr_id.request_finished;
+                uint32_t stream_id = wr_id.wr_id.stream_id;
+                if (this->wr_occupied_ > 0) {
+                    this->wr_occupied_--;
+                }
+                if (request_finished && !this->pending_local_send_flag_map_[stream_id].empty()) {
+                    this->pending_local_send_flag_map_[stream_id].front()->store(true);
+                    this->pending_local_send_flag_map_[stream_id].pop();
+                }
+                continue;
+            }
 
             wrid_t wr_id;
             wr_id.value = wc.wr_id;
@@ -246,6 +283,37 @@ void PickleSender::poll() noexcept(false) {
             }
         }
     }
+}
+
+void PickleSender::force_complete_all() {
+    // 1. Drain anything still sitting in the enqueue path (user threads may
+    //    have called send() after the QP went into error state).
+    vector<Command> commands(kMagic);
+    uint64_t count;
+    do {
+        count = this->send_request_command_queue_.try_dequeue_bulk(commands.begin(), kMagic);
+        for (uint64_t i = 0; i < count; ++i) {
+            commands[i].flag->store(true);
+        }
+    } while (count > 0);
+
+    // 2. Force-complete everything that's been dequeued into the local map.
+    for (auto& kv : this->pending_local_send_flag_map_) {
+        auto& flag_queue = kv.second;
+        while (!flag_queue.empty()) {
+            flag_queue.front()->store(true);
+            flag_queue.pop();
+        }
+    }
+
+    // 3. Reset internal bookkeeping; the QP is dying, no more WRs will complete.
+    this->pending_local_send_flag_map_.clear();
+    this->pending_local_send_request_map_.clear();
+    this->pending_remote_recv_request_map_.clear();
+    while (!this->remote_recv_request_queue_.empty()) {
+        this->remote_recv_request_queue_.pop();
+    }
+    this->wr_occupied_ = 0;
 }
 
 PickleRecver::PickleRecver(unique_ptr<RcQueuePair> qp, shared_ptr<Flusher> flusher) noexcept(false) :
@@ -330,14 +398,19 @@ void PickleRecver::poll() noexcept(false) {
             int(wc.status),
             int(wc.opcode)
         );
-        PICKLE_ASSERT(
-            wc.status == ibv_wc_status::IBV_WC_SUCCESS && wc.opcode == ibv_wc_opcode::IBV_WC_SEND,
-            "Op post_send_send failed: status={}, opcode={}, vendor_err={}, status_str=\"{}\"",
-            int(wc.status),
-            int(wc.opcode),
-            wc.vendor_err,
-            ibv_wc_status_str(wc.status)
-        );
+        if (wc.status != ibv_wc_status::IBV_WC_SUCCESS ||
+            wc.opcode != ibv_wc_opcode::IBV_WC_SEND) {
+            // Error CQE on the ticket-notify send path. QP error detection
+            // in start_polling will tear the connection down on its own.
+            WARN(
+                "pickle::PickleRecver::poll() send CQ error CQE: status={}, opcode={}, vendor_err={}, status_str=\"{}\"",
+                int(wc.status),
+                int(wc.opcode),
+                wc.vendor_err,
+                ibv_wc_status_str(wc.status)
+            );
+            continue;
+        }
     }
 
     ret = this->qp_->poll_recv_cq_once(kMagic, this->polled_recv_wcs_);
@@ -349,14 +422,20 @@ void PickleRecver::poll() noexcept(false) {
             int(wc.status),
             int(wc.opcode)
         );
-        PICKLE_ASSERT(
-            wc.status == ibv_wc_status::IBV_WC_SUCCESS && wc.opcode == ibv_wc_opcode::IBV_WC_RECV_RDMA_WITH_IMM,
-            "Failed to receive data: status={}, opcode={}, vendor_err={}, status_str=\"{}\"",
-            int(wc.status),
-            int(wc.opcode),
-            wc.vendor_err,
-            ibv_wc_status_str(wc.status)
-        );
+        if (wc.status != ibv_wc_status::IBV_WC_SUCCESS ||
+            wc.opcode != ibv_wc_opcode::IBV_WC_RECV_RDMA_WITH_IMM) {
+            // Error CQE on the recv path. Return the WR slot so it isn't
+            // permanently lost, then let QP error detection clean up.
+            WARN(
+                "pickle::PickleRecver::poll() recv CQ error CQE: status={}, opcode={}, vendor_err={}, status_str=\"{}\"",
+                int(wc.status),
+                int(wc.opcode),
+                wc.vendor_err,
+                ibv_wc_status_str(wc.status)
+            );
+            this->free_slots.push(wc.wr_id);
+            continue;
+        }
         uint32_t stream_id = reinterpret_cast<uint32_t>(wc.imm_data);
 
         queue<Command>& queue = this->pending_local_recv_request_map_[stream_id];
@@ -438,6 +517,35 @@ void Flusher::poll() noexcept(false) {
             );
         }
     }
+}
+
+void PickleRecver::force_complete_all() {
+    // 1. Drain anything still in the enqueue path (recv() may have been
+    //    called by a user thread after the QP went into error state).
+    vector<Command> commands(kMagic);
+    uint64_t count;
+    do {
+        count = this->recv_request_command_queue_.try_dequeue_bulk(commands.begin(), kMagic);
+        for (uint64_t i = 0; i < count; ++i) {
+            commands[i].flag->store(true);
+        }
+    } while (count > 0);
+
+    // 2. Force-complete everything already in the local map.
+    for (auto& kv : this->pending_local_recv_request_map_) {
+        auto& cmd_queue = kv.second;
+        while (!cmd_queue.empty()) {
+            cmd_queue.front().flag->store(true);
+            cmd_queue.pop();
+        }
+    }
+
+    // 3. Reset internal bookkeeping; the QP is dying, no more WRs will complete.
+    this->pending_local_recv_request_map_.clear();
+    while (!this->pending_local_recv_request_queue_.empty()) {
+        this->pending_local_recv_request_queue_.pop();
+    }
+    this->count_pending_requests_ = 0;
 }
 
 }  // namespace pickle
