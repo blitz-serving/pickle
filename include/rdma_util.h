@@ -33,6 +33,25 @@ struct DeviceInfo {
     DeviceInfo(const char* device_name, __be64 guid) : device_name(device_name), guid(guid) {}
 };
 
+struct GidInfo {
+    uint32_t gid_index;
+    ibv_gid gid;
+    uint32_t gid_type;
+
+    GidInfo(uint32_t gid_index, ibv_gid gid, uint32_t gid_type)
+        : gid_index(gid_index), gid(gid), gid_type(gid_type) {}
+};
+
+struct PortInfo {
+    uint8_t port_num;
+    uint8_t link_layer;
+    std::vector<GidInfo> gids;
+
+    bool is_roce() const {
+        return link_layer == IBV_LINK_LAYER_ETHERNET;
+    }
+};
+
 class Context {
     friend class ProtectionDomain;
     friend class MemoryRegion;
@@ -54,6 +73,8 @@ public:
     static std::unique_ptr<Context> create(const char* device_name) noexcept(false);
 
     static std::vector<DeviceInfo> get_device_infos() noexcept(false);
+
+    PortInfo query_port_info(uint8_t port_num = 1) const noexcept(false);
 
     ~Context();
 };

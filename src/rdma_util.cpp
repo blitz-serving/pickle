@@ -60,6 +60,42 @@ std::vector<DeviceInfo> Context::get_device_infos() noexcept(false) {
     return devices;
 }
 
+PortInfo Context::query_port_info(uint8_t port_num) const noexcept(false) {
+    ibv_port_attr attr {};
+    if (ibv_query_port(this->inner, port_num, &attr)) {
+        char buf[128];
+        sprintf(buf, "Failed to query port. Errno(%d): %s", errno, strerror(errno));
+        throw std::runtime_error(buf);
+    }
+
+    PortInfo info {};
+    info.port_num = port_num;
+    info.link_layer = attr.link_layer;
+
+    ibv_gid_entry entries[64];
+    int num_entries = _ibv_query_gid_table(
+        this->inner, entries, 64, 0, sizeof(entries[0])
+    );
+    if (num_entries > 0) {
+        for (int i = 0; i < num_entries; i++) {
+            if (entries[i].port_num != port_num) {
+                continue;
+            }
+            info.gids.emplace_back(entries[i].gid_index, entries[i].gid, entries[i].gid_type);
+        }
+        return info;
+    }
+
+    for (uint32_t gid_index = 0;
+         gid_index < static_cast<uint32_t>(attr.gid_tbl_len); gid_index++) {
+        ibv_gid gid {};
+        if (ibv_query_gid(this->inner, port_num, gid_index, &gid) == 0) {
+            info.gids.emplace_back(gid_index, gid, IBV_GID_TYPE_IB);
+        }
+    }
+    return info;
+}
+
 std::unique_ptr<Context> Context::create(const char* device_name) noexcept(false) {
     DEBUG("rdma_util::Context::create() creating context using {}", device_name);
     return std::unique_ptr<Context>(new Context(device_name));
